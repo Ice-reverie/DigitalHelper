@@ -12,3 +12,5 @@ fastapi
 uvicorn
 pydantic
 edge-tts
+av
+pypinyin
