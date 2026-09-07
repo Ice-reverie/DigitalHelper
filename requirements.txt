@@ -1,0 +1,14 @@
+kaldi_native_fbank
+tqdm
+scikit-learn
+pyglm
+glfw
+PyOpenGL
+gradio
+sherpa-onnx
+
+# VRM Web demo
+fastapi
+uvicorn
+pydantic
+edge-tts
