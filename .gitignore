@@ -41,9 +41,8 @@ web_demo/static/cosyvoice2
 
 talkingface/models/DINet_mini_logo.py
 mini_live/MatesX_logo.png
-# ������־
+#       ־
 vrm_server.log
 vrm_server_err.log
 vrm_demo/server_out.log
 vrm_demo/server_err.log
-vrm_demo/tools/
