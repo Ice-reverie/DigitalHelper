@@ -55,6 +55,19 @@ async def default_idle():
         raise HTTPException(status_code=404, detail="Default idle animation not found")
     return FileResponse(path, media_type="application/json")
 
+
+SCENE_ACTIONS = frozenset({"greet", "explain", "alert", "booking", "confirm", "thanks", "wink"})
+
+
+@app.get("/api/animations/{name}")
+async def scene_animation(name: str):
+    if name not in SCENE_ACTIONS:
+        raise HTTPException(status_code=404, detail="Unknown animation")
+    path = os.path.join(BASE_DIR, "..", "models", "animations", name + ".vrma")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Animation file not found")
+    return FileResponse(path, media_type="model/gltf-binary")
+
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 TTS_TIMEOUT_SECONDS = 15
 SEGMENT_CONCURRENCY = 3
@@ -62,6 +75,7 @@ DEPARTMENTS = ["内科", "外科", "康复科", "体检中心"]
 APPOINTMENT_TIMES = ["明天上午", "明天下午", "后天上午"]
 
 ACTION_RULES = [
+    (["眨个眼", "眨一下", "眨眼", "wink", "你真可爱", "你真棒"], "wink"),
     (["预警", "异常", "提醒"], "alert"),
     (["确认", "知道了", "联系家人"], "confirm"),
     (["你好", "您好", "嗨", "在吗", "hello"], "greet"),
@@ -234,6 +248,10 @@ def build_reply(text: str, context: Dict[str, str] | None = None):
                 "好的，已模拟设置稍后提醒。演示系统不会真实创建通知。",
                 "confirm",
             )
+        return _result(
+            "请先选择如何处理这条模拟健康预警。",
+            "alert", ["我已确认", "联系家人", "稍后提醒"], state,
+        )
 
     if flow == "appointment" and step == "department":
         department = next((item for item in DEPARTMENTS if item in message), "")
@@ -319,6 +337,9 @@ def build_reply(text: str, context: Dict[str, str] | None = None):
             "explain",
             ["健康查询", "查看健康预警", "预约门诊"],
         )
+
+    if any(word in message.lower() for word in ["眨个眼", "眨一下", "眨眼", "wink", "你真可爱", "你真棒"]):
+        return _result("收到，送您一个小小的眨眼。有我陪着，慢慢来。", "wink")
 
     if any(word in message.lower() for word in ["你好", "您好", "嗨", "在吗", "hello"]):
         return _result(

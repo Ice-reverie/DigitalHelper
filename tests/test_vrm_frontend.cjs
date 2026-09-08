@@ -221,3 +221,86 @@ test('blinking closes then reopens both eyes and schedules the next blink', () =
   assert.equal(values.blink, 0);
   assert.ok(f.run('nextBlinkAt') >= 2541);
 });
+
+
+test('scene actions deduplicate consecutive scenes and honor reduced motion', () => {
+  const f = frontend();
+  f.run("currentVrm = {}; calls = []; playActionByName = name => calls.push(name); handleAction('booking'); handleAction('booking'); handleAction('confirm'); handleAction('booking');");
+  assert.deepEqual(Array.from(f.run('calls')), ['booking','confirm','booking']);
+  f.run("motionReduced = true; handleAction('wink');");
+  assert.equal(f.run('calls.length'), 3);
+});
+
+test('late scene loads and previous-model loads cannot replace current actions', async () => {
+  const f = frontend();
+  f.run("currentVrm = {}; played = []; pending = {}; getSceneAnimation = name => new Promise(resolve => pending[name] = resolve); playVrmAnimation = (a,l,n) => played.push(n); THREE.LoopOnce = 1;");
+  const old = f.run("playActionByName('greet')");
+  const fresh = f.run("playActionByName('wink')");
+  f.run("pending.wink({}); pending.greet({});");
+  await Promise.all([old,fresh]);
+  assert.deepEqual(Array.from(f.run('played')), ['wink']);
+  const changing = f.run("playActionByName('thanks')");
+  f.run('modelLoadId += 1; pending.thanks({});');
+  await changing;
+  assert.equal(f.run('played.length'), 1);
+});
+
+test('animation cache shares loads and retries failed resources', async () => {
+  const f = frontend();
+  f.run('loads = []; createAnimationLoader = () => ({ load(...args) { loads.push(args); } });');
+  const a = f.run("getSceneAnimation('greet')");
+  const b = f.run("getSceneAnimation('greet')");
+  assert.equal(a, b);
+  f.run("loads[0][1]({ userData:{vrmAnimations:[{duration:3}]} });");
+  await a;
+  assert.equal(f.run('loads.length'), 1);
+  const bad = f.run("getSceneAnimation('thanks')");
+  f.run("loads[1][3](new Error('missing'));");
+  await assert.rejects(bad);
+  const retry = f.run("getSceneAnimation('thanks')");
+  assert.equal(f.run('loads.length'), 3);
+  f.run("loads[2][1]({userData:{vrmAnimations:[{}]}});");
+  await retry;
+});
+
+test('track filtering preserves mouth and gaze ownership, except explicit wink blinking', () => {
+  const f = frontend();
+  f.run(`sample = { humanoidTracks:{rotation:new Map([['head',{}],['leftEye',{}],['jaw',{}]]),translation:new Map()},
+    expressionTracks:{preset:new Map([['aa',{}],['blinkLeft',{}],['happy',{}]]),custom:new Map([['unsupported',{}]])},lookAtTrack:{} };
+    model = {expressionManager:{getExpression:n => ['aa','blinkLeft'].includes(n)}};`);
+  assert.equal(f.run("filteredSceneAnimation(sample,'greet',model).expressionTracks.preset.size"),0);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'wink',model).expressionTracks.preset.keys()")),['blinkLeft']);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'greet',model).humanoidTracks.rotation.keys()")),['head']);
+  assert.equal(f.run("filteredSceneAnimation(sample,'wink',model).lookAtTrack"),null);
+});
+
+test('finished actions release mixer, clear expressions and restore base pose', () => {
+  const f = frontend();
+  f.run(`currentVrm = {scene:{},expressionManager:{setValue(n,v){cleared[n]=v;},getValue(){return 1;}}};
+    cleared = {}; stopped = false; restored = 0;
+    modelPose = [{node:{quaternion:{copy(){restored++;}},position:{copy(){restored++;}}}, rotation:{},position:{}}];
+    scenePlayback = {elapsed:0, duration:.3, bases:[], bindings:[], expressions:['blinkLeft']}; activeAction = {};
+    mixer = {update(){},stopAllAction(){stopped=true;},uncacheRoot(){}};
+    updateSceneAnimation(.3);`);
+  assert.equal(f.run('activeAction'),null);
+  assert.equal(f.run('scenePlayback'),null);
+  assert.equal(f.run('stopped'),true);
+  assert.equal(f.run('cleared.blinkLeft'),0);
+  assert.equal(f.run('restored'),2);
+});
+
+
+test('held action samples survive idle writes when the mixer skips unchanged values', () => {
+  const f = frontend();
+  f.run(`target = {weight:0}; proxy = {weight:0}; cached = false;
+    scenePlayback = {elapsed:0, duration:3, bases:[], expressions:[],
+      bindings:[{target,proxy,property:'weight'}]};
+    mixer = {update(){ if(!cached){ proxy.weight=1; cached=true; } }};
+    held=[];
+    for(let frame=0;frame<30;frame++){
+      target.weight=0;
+      updateSceneAnimation(1/60);
+      held.push(target.weight);
+    }`);
+  assert.ok(Array.from(f.run('held')).every(value => value === 1));
+});

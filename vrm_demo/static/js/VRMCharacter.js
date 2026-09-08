@@ -41,6 +41,13 @@ let modelLoadId = 0;
 let idleAnimation = null;
 let gazeTarget = null;
 const gazePointer = { x: 0, y: 0, smoothX: 0, smoothY: 0 };
+const ACTION_LABELS = { greet:'问候', explain:'讲解', alert:'预警提醒', booking:'预约引导', confirm:'确认', thanks:'致谢', wink:'轻松互动' };
+const actionCache = new Map();
+let actionRequestId = 0;
+let lastSceneAction = null;
+let scenePlayback = null;
+let animationRig = null;
+let modelPose = [];
 let mixer = null;
 let activeAction = null;
 let waveState = null;
@@ -166,6 +173,7 @@ function bindUI() {
   const motionButton = document.getElementById('motion-btn');
   const applyMotion = () => {
     document.documentElement.classList.toggle('motion-reduced', motionReduced);
+    if (motionReduced) { actionRequestId += 1; stopSceneAnimation(); }
     motionButton.setAttribute('aria-pressed', String(motionReduced));
     motionButton.textContent = motionReduced ? '动态已减少' : '减少动态';
   };
@@ -391,16 +399,13 @@ async function sendMessage(providedText = '', startNewService = false) {
 }
 
 function handleAction(actionName) {
-  if (!actionName) return;
-  const labels = {
-    greet: '问候', booking: '预约引导', thanks: '致谢', explain: '讲解', alert: '预警提醒', confirm: '确认',
-  };
-  if (!currentVrm) {
-    setModelStatus(`动作“${labels[actionName] || actionName}”已识别`, '3D 形象接入后将与对话同步播放');
-    return;
-  }
-  if (actionName === 'greet') startWave();
-  playActionByName(actionName);
+  const name = Object.hasOwn(ACTION_LABELS, actionName) ? actionName : null;
+  if (name === lastSceneAction) return;
+  lastSceneAction = name;
+  actionRequestId += 1;
+  if (!name || motionReduced) return;
+  if (!currentVrm) return;
+  playActionByName(name);
 }
 
 function setModelStatus(title, detail) {
@@ -420,6 +425,9 @@ function loadVrm(url, name, release = () => {}) {
     return;
   }
   const loadId = ++modelLoadId;
+  actionRequestId += 1;
+  lastSceneAction = null;
+  stopSceneAnimation();
   setModelStatus('正在加载 3D 模型…', name);
   const loader = new GLTFLoader();
   loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -448,6 +456,10 @@ function loadVrm(url, name, release = () => {}) {
       const rightArm = getBone('rightUpperArm');
       if (leftArm) leftArm.rotation.z = 1.15;
       if (rightArm) rightArm.rotation.z = -1.15;
+      modelPose = Object.keys(vrm.humanoid.normalizedHumanBones).map((name) => {
+        const node = vrm.humanoid.getNormalizedBoneNode(name);
+        return { name, node, rotation:node.quaternion.clone(), position:node.position.clone() };
+      });
       vrm.update(0);
       vrm.scene.updateMatrixWorld(true);
       vrm.scene.traverse((object) => { if (object.isSkinnedMesh) object.skeleton.update(); });
@@ -457,6 +469,7 @@ function loadVrm(url, name, release = () => {}) {
       nextBlinkAt = performance.now() + 2200;
       blinking = false;
       if (url.startsWith('/api/avatar')) loadDefaultIdle(gltf, vrm, loadId);
+      Object.keys(ACTION_LABELS).forEach(name => getSceneAnimation(name).catch(() => {}));
       elements.avatarPlaceholder.hidden = true;
       setModelStatus('3D 模型已加载', '可以测试挥手和对话');
       document.getElementById('reset-view-btn').hidden = false;
@@ -538,7 +551,6 @@ function updateIdle(delta) {
   if (!motionReduced) idleAnimation.time += delta;
   const { index, fraction } = idleSample(idleAnimation.time, idleAnimation.duration, idleAnimation.fps);
   for (const track of idleAnimation.tracks) {
-    if (activeAction && track.bone) continue;
     track.current.fromArray(track.values, index * 4);
     track.next.fromArray(track.values, (index + 1) * 4);
     track.current.slerp(track.next, fraction);
@@ -549,48 +561,51 @@ function updateIdle(delta) {
 }
 
 function loadVrmAnimation(file) {
-  if (!currentVrm) {
-    setModelStatus('请先载入 3D 模型', '动作文件需要与模型配合使用');
-    return;
-  }
+  if (!currentVrm) return;
+  const vrm = currentVrm;
+  const id = ++actionRequestId;
+  const modelId = modelLoadId;
   const url = URL.createObjectURL(file);
-  const loader = createAnimationLoader();
-  loader.load(
-    url,
-    (gltf) => {
-      URL.revokeObjectURL(url);
-      const animations = gltf.userData.vrmAnimations;
-      if (!animations?.length) {
-        setModelStatus('动作文件无法读取', '请确认所选文件是有效的 .vrma 动作');
-        return;
-      }
-      playVrmAnimation(animations[0], THREE.LoopPingPong);
-      setModelStatus('动作正在播放', file.name);
-    },
-    undefined,
-    (error) => {
-      URL.revokeObjectURL(url);
-      console.error('VRMA 加载失败：', error);
-      setModelStatus('动作加载失败', '请检查动作文件是否与模型兼容');
-    },
-  );
+  createAnimationLoader().load(url, (gltf) => {
+    URL.revokeObjectURL(url);
+    if (id !== actionRequestId || modelId !== modelLoadId || vrm !== currentVrm) return;
+    try {
+      if (!gltf.userData.vrmAnimations?.length) throw new Error('Empty animation');
+      playVrmAnimation(gltf.userData.vrmAnimations[0], THREE.LoopOnce, 'preview');
+    } catch (error) { setModelStatus('动作无法播放', '请检查动作文件'); }
+  }, undefined, () => { URL.revokeObjectURL(url); });
 }
 
-function playActionByName(name) {
-  if (!currentVrm) return;
-  const url = `animations/${name}.vrma`;
-  const loader = createAnimationLoader();
-  loader.load(
-    url,
-    (gltf) => {
-      const animations = gltf.userData.vrmAnimations;
-      if (animations?.length) playVrmAnimation(animations[0], THREE.LoopOnce);
-    },
-    undefined,
-    () => {
-      setModelStatus('已使用基础动作', `未配置 ${name}.vrma，不影响对话流程`);
-    },
-  );
+function getSceneAnimation(name) {
+  if (!Object.hasOwn(ACTION_LABELS, name)) return Promise.reject(new Error('Unknown action'));
+  if (!actionCache.has(name)) {
+    const pending = new Promise((resolve, reject) => {
+      createAnimationLoader().load(`/api/animations/${name}`, gltf => {
+        const animation = gltf.userData.vrmAnimations?.[0];
+        if (animation) resolve(animation);
+        else reject(new Error('Empty animation'));
+      }, undefined, reject);
+    });
+    actionCache.set(name, pending);
+    pending.catch(() => { if (actionCache.get(name) === pending) actionCache.delete(name); });
+  }
+  return actionCache.get(name);
+}
+
+async function playActionByName(name) {
+  const id = ++actionRequestId;
+  const vrm = currentVrm;
+  const modelId = modelLoadId;
+  try {
+    const animation = await getSceneAnimation(name);
+    if (id !== actionRequestId || modelId !== modelLoadId || currentVrm !== vrm || motionReduced) return;
+    playVrmAnimation(animation, THREE.LoopOnce, name);
+    setModelStatus(`正在${ACTION_LABELS[name]}`, '动作结束后自动恢复自然待机');
+  } catch (error) {
+    if (id !== actionRequestId || modelId !== modelLoadId) return;
+    stopSceneAnimation();
+    setModelStatus('已恢复自然待机', '动作暂不可用，不影响对话');
+  }
 }
 
 function createAnimationLoader() {
@@ -599,15 +614,115 @@ function createAnimationLoader() {
   return loader;
 }
 
-function playVrmAnimation(vrmAnimation, loopMode) {
-  if (mixer) mixer.stopAllAction();
-  mixer = new THREE.AnimationMixer(currentVrm.scene);
-  const clip = createVRMAnimationClip(vrmAnimation, currentVrm);
+function filteredSceneAnimation(animation, name, vrm) {
+  const isBlink = key => ['blink', 'blinkLeft', 'blinkRight'].includes(key);
+  return { ...animation, lookAtTrack:null,
+    humanoidTracks: {
+      rotation:new Map([...animation.humanoidTracks.rotation].filter(([bone]) => !['leftEye','rightEye','jaw'].includes(bone))),
+      translation:new Map(animation.humanoidTracks.translation),
+    },
+    expressionTracks: {
+      preset:new Map([...animation.expressionTracks.preset].filter(([key]) =>
+        !VOWELS.includes(key) && (!isBlink(key) || name === 'wink') && vrm.expressionManager?.getExpression(key))),
+      custom:new Map([...animation.expressionTracks.custom].filter(([key]) => vrm.expressionManager?.getExpression(key))),
+    },
+  };
+}
+
+function restoreModelPose() {
+  for (const pose of modelPose) {
+    pose.node.quaternion.copy(pose.rotation);
+    pose.node.position.copy(pose.position);
+  }
+}
+
+function stopSceneAnimation() {
+  if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(animationRig); }
+  if (scenePlayback) scenePlayback.expressions.forEach(name => setExpression(name, 0));
+  mixer = null;
+  animationRig = null;
+  activeAction = null;
+  scenePlayback = null;
+  restoreModelPose();
+}
+
+function playVrmAnimation(animation, loopMode, name = 'preview') {
+  const from = new Map(modelPose.map(p => [p.name, { rotation:p.node.quaternion.clone(), position:p.node.position.clone() }]));
+  stopSceneAnimation();
+  waveState = null;
+  const filtered = filteredSceneAnimation(animation, name, currentVrm);
+  const clip = createVRMAnimationClip(filtered, currentVrm);
+  if (!clip.tracks.length || !Number.isFinite(clip.duration) || clip.duration <= 0) throw new Error('Empty clip');
+  // Sample on an isolated rig: PropertyMixer skips unchanged values, so it must
+  // never share its targets with the idle writer or our transition blending.
+  animationRig = new THREE.Group();
+  const proxies = new Map();
+  const bindings = clip.tracks.map(track => {
+    const path = THREE.PropertyBinding.parseTrackName(track.name);
+    const target = THREE.PropertyBinding.findNode(currentVrm.scene, path.nodeName);
+    const property = path.propertyName;
+    if (!target || !['quaternion','position','weight'].includes(property)) throw new Error(`Unsupported action track: ${track.name}`);
+    let proxy = proxies.get(target);
+    if (!proxy) {
+      proxy = new THREE.Object3D();
+      proxy.name = target.name;
+      proxy.uuid = target.uuid;
+      proxies.set(target, proxy);
+      animationRig.add(proxy);
+    }
+    if (property === 'weight') proxy.weight = 0;
+    else proxy[property].copy(target[property]);
+    return { target, proxy, property };
+  });
+  mixer = new THREE.AnimationMixer(animationRig);
   activeAction = mixer.clipAction(clip);
-  activeAction.setLoop(loopMode, loopMode === THREE.LoopOnce ? 1 : Infinity);
-  activeAction.clampWhenFinished = loopMode === THREE.LoopOnce;
+  activeAction.setLoop(THREE.LoopOnce, 1);
+  activeAction.clampWhenFinished = true;
   activeAction.play();
-  mixer.addEventListener('finished', () => { activeAction = null; });
+  scenePlayback = { name, elapsed:0, duration:clip.duration, from, bindings,
+    expressions:[...filtered.expressionTracks.preset.keys(), ...filtered.expressionTracks.custom.keys()],
+    bases:modelPose.map(p => ({...p, baseRotation:p.rotation.clone(), basePosition:p.position.clone()})),
+  };
+  if (name === 'wink') { blinking = false; setExpression('blink', 0); }
+}
+
+function updateSceneAnimation(delta) {
+  if (!scenePlayback || !mixer) return;
+  const state = scenePlayback;
+  state.elapsed += delta;
+  for (const p of state.bases) {
+    p.baseRotation.copy(p.node.quaternion);
+    p.basePosition.copy(p.node.position);
+  }
+  mixer.update(delta);
+  // Always publish the sampled pose, including constant/held keyframes.
+  for (const { target, proxy, property } of state.bindings) {
+    if (property === 'weight') target.weight = proxy.weight;
+    else target[property].copy(proxy[property]);
+  }
+  const enter = Math.min(1, state.elapsed / .3);
+  const leave = Math.max(0, Math.min(1, (state.duration - state.elapsed) / .3));
+  for (const p of state.bases) {
+    const from = state.from.get(p.name);
+    if (enter < 1) {
+      p.node.quaternion.slerp(from.rotation, 1 - enter);
+      p.node.position.lerp(from.position, 1 - enter);
+    }
+    if (leave < 1) {
+      p.node.quaternion.slerp(p.baseRotation, 1 - leave);
+      p.node.position.lerp(p.basePosition, 1 - leave);
+    }
+  }
+  for (const name of state.expressions) {
+    const value = currentVrm.expressionManager.getValue(name) || 0;
+    setExpression(name, value * Math.min(enter, leave));
+  }
+  if (state.elapsed >= state.duration) {
+    stopSceneAnimation();
+    updateIdle(0);
+    nextBlinkAt = performance.now() + 2200;
+    setModelStatus('自然待机', '可以继续和我说话');
+  }
 }
 
 function startWave() {
@@ -744,10 +859,12 @@ function setExpression(name, value) {
 function updateAvatar(delta) {
   if (!currentVrm) return;
   const now = performance.now();
+  restoreModelPose();
   const hasIdle = updateIdle(delta);
+  updateSceneAnimation(delta);
   updateGaze(delta);
 
-  updateBlink(now);
+  if (scenePlayback?.name !== 'wink') updateBlink(now);
   if (currentVisemes && audioContext) {
     const elapsed = audioContext.currentTime - currentVisemes.startTime;
     const timeline = currentVisemes.timeline;
@@ -783,9 +900,7 @@ function updateAvatar(delta) {
     const open = 0.12 + Math.abs(Math.sin(now * 0.012)) * 0.28;
     VOWELS.forEach((v) => setExpression(v, v === target ? open : 0));
   }
-  if (activeAction && mixer) {
-    mixer.update(delta);
-  } else {
+  if (!activeAction) {
     const head = getBone('head');
     if (head && !hasIdle) {
       head.rotation.y = motionReduced ? 0 : Math.sin(now * 0.0006) * 0.06;

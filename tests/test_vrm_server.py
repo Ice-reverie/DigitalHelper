@@ -144,3 +144,32 @@ class SpeechPipelineTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SceneActionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_named_assets_and_whitelist(self):
+        from fastapi import HTTPException
+        for name in server.SCENE_ACTIONS:
+            response = await server.scene_animation(name)
+            self.assertTrue(Path(response.path).is_file())
+        for name in ['idle', '../characters/Lumine', 'missing', 'greet.vrma']:
+            with self.assertRaises(HTTPException):
+                await server.scene_animation(name)
+        with patch.object(server.os.path, 'isfile', return_value=False):
+            with self.assertRaises(HTTPException):
+                await server.scene_animation('greet')
+
+    async def test_seven_scenes_and_business_priority(self):
+        for message, action in [('你好','greet'), ('健康查询','explain'), ('查看健康预警','alert'),
+                                ('预约门诊','booking'), ('谢谢','thanks'), ('你真可爱','wink'), ('WINK','wink')]:
+            self.assertEqual(build_reply(message)['action'], action)
+        for context in [{'flow':'alert','step':'confirm'}, {'flow':'appointment','step':'department'}]:
+            result = build_reply('你真棒，眨个眼', context)
+            self.assertNotEqual(result['action'], 'wink')
+            self.assertEqual(result['context'], context)
+        start = build_reply('预约门诊')
+        department = build_reply('内科',start['context'])
+        time = build_reply('明天上午',department['context'])
+        self.assertEqual([start['action'],department['action'],time['action']], ['booking']*3)
+        self.assertEqual(build_reply('确认预约',time['context'])['action'],'confirm')
+        self.assertEqual(build_reply('取消预约',department['context'])['action'],'confirm')
