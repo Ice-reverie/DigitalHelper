@@ -52,6 +52,8 @@
 
 ## 安装与运行
 
+Windows 下双击根目录的 `run.cmd` 即可启动，也可在终端执行。脚本依次查找项目的 `.venv`、`venv`、`env`、`virtualenv`，随后检查已激活的虚拟环境；没有时使用全局 `python` 或 `py -3`。缺少依赖时会提示安装命令，不会自动安装。`run.cmd --check` 仅检查并显示所选 Python，不启动服务。
+
 ```bash
 # 1. 安装依赖
 pip install fastapi uvicorn pydantic edge-tts
