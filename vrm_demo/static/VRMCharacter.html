@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#fafbf8" />
   <title>安心健康助手 · 慢慢说，我在听</title>
-  <link rel="stylesheet" href="./css/companion.css" />
+  <link rel="stylesheet" href="./css/companion.css?v=side-5" />
   <script type="importmap">
     {
       "imports": {
@@ -23,93 +23,43 @@
   <a class="skip-link" href="#voice-btn">跳到对话操作</a>
   <div class="app-shell">
     <header class="topbar">
-      <a class="brand" href="./VRMCharacter.html" aria-label="安心健康助手首页">
-        <span class="brand-word">安心<span class="brand-en" lang="en">ANXIN</span></span>
-        <span class="brand-description">您的健康小帮手</span>
-      </a>
+      <a class="brand" href="./VRMCharacter.html" aria-label="安心健康助手首页"><span class="brand-word">安心 <span class="brand-en">ANXIN</span></span><span class="brand-description">一直在您身边</span></a>
       <div class="header-actions">
+        <button id="motion-btn" class="utility-button" type="button" aria-pressed="false">减少动态</button>
         <button id="font-size-btn" class="utility-button" type="button" aria-pressed="false">放大文字</button>
-        <a class="utility-button help-link" href="#help">使用帮助</a>
+        <button id="history-btn" class="utility-button" type="button">对话记录</button>
       </div>
     </header>
-
-    <main>
-      <section class="intro" aria-labelledby="page-title">
-        <div><p class="eyebrow">多一点陪伴，少一点操心</p><h1 id="page-title">健康的事，<span>慢慢说。</span></h1></div>
-        <p class="intro-note">不用记步骤，也不用打字。<br />说出您的需要，小安陪您一步步完成。</p>
+    <main class="immersive-stage" aria-label="数字人对话舞台">
+      <div class="ambient-backdrop" aria-hidden="true"><div class="aurora aurora-mint"></div><div class="aurora aurora-lilac"></div><div class="aurora aurora-sky"></div><div class="light-orbit orbit-one"></div><div class="light-orbit orbit-two"></div><div class="light-dust"><i style="--x:9%;--y:11%;--delay:-0.0s;--size:3px"></i><i style="--x:46%;--y:34%;--delay:-0.83s;--size:4px"></i><i style="--x:83%;--y:57%;--delay:-1.66s;--size:5px"></i><i style="--x:20%;--y:80%;--delay:-2.4899999999999998s;--size:6px"></i><i style="--x:57%;--y:3%;--delay:-3.32s;--size:3px"></i><i style="--x:94%;--y:26%;--delay:-4.1499999999999995s;--size:4px"></i><i style="--x:31%;--y:49%;--delay:-4.9799999999999995s;--size:5px"></i><i style="--x:68%;--y:72%;--delay:-5.81s;--size:6px"></i><i style="--x:5%;--y:95%;--delay:-6.64s;--size:3px"></i><i style="--x:42%;--y:18%;--delay:-7.47s;--size:4px"></i><i style="--x:79%;--y:41%;--delay:-8.299999999999999s;--size:5px"></i><i style="--x:16%;--y:64%;--delay:-9.129999999999999s;--size:6px"></i><i style="--x:53%;--y:87%;--delay:-9.959999999999999s;--size:3px"></i><i style="--x:90%;--y:10%;--delay:-10.79s;--size:4px"></i><i style="--x:27%;--y:33%;--delay:-11.62s;--size:5px"></i><i style="--x:64%;--y:56%;--delay:-12.45s;--size:6px"></i><i style="--x:1%;--y:79%;--delay:-13.28s;--size:3px"></i><i style="--x:38%;--y:2%;--delay:-14.11s;--size:4px"></i><i style="--x:75%;--y:25%;--delay:-14.94s;--size:5px"></i><i style="--x:12%;--y:48%;--delay:-15.77s;--size:6px"></i></div></div>
+      <div class="stage-intro"><p>有我陪着，慢慢来。</p><h1>今天，也要好好照顾自己。</h1><span id="system-state-text" role="status">正在连接</span></div>
+      <section class="avatar-panel" aria-labelledby="avatar-title">
+        <h2 id="avatar-title" class="visually-hidden">您的数字人伙伴小安</h2>
+        <div id="stage" role="img" aria-label="3D 数字人展示区域"></div>
+        <div id="avatar-placeholder" class="avatar-copy"><p>小安正在准备中</p><p>您也可以先说话或打字。</p></div>
       </section>
-
-      <div class="workspace">
-        <div class="companion-column">
-          <section class="avatar-panel" aria-labelledby="avatar-title">
-            <div class="avatar-heading"><span class="companion-label">您的数字人伙伴</span><span class="avatar-name" id="avatar-title">小安</span></div>
-            <div id="stage" role="img" aria-label="3D 数字人展示区域"></div>
-            <div class="avatar-copy" id="avatar-placeholder">
-              <p class="placeholder-title">很高兴陪着您</p>
-              <p>数字人形象尚未载入<br />您可以先和我聊一聊</p>
-            </div>
-            <p class="stage-caption">不用着急，我会一步一步陪您。</p>
-            <div class="avatar-actions">
-              <button id="enlarge-avatar-btn" type="button" class="reset-view" hidden>放大人物</button>
-              <button id="reset-view-btn" type="button" class="reset-view" hidden>恢复全身</button>
-            </div>
-          </section>
-          <nav class="service-grid" aria-label="常用健康服务">
-            <button class="service-card service-health" type="button" data-service="健康查询"><span class="service-title">问问健康</span><span class="service-description">说说哪里不舒服</span></button>
-            <button class="service-card service-alert" type="button" data-service="查看健康预警"><span class="service-title">查看提醒</span><span class="service-description">看看健康预警</span></button>
-            <button class="service-card service-booking" type="button" data-service="预约门诊"><span class="service-title">预约服务</span><span class="service-description">按提示轻松选择</span></button>
-          </nav>
-        </div>
-
-        <section class="chat-panel" aria-labelledby="chat-title">
-          <div class="chat-heading">
-            <div><p class="eyebrow">和小安聊一聊</p><h2 id="chat-title">今天想让我帮您什么？</h2></div>
-            <span id="system-state-text" class="system-state" role="status">正在连接</span>
-          </div>
-          <div class="composer">
-            <button id="voice-btn" type="button" aria-pressed="false" aria-describedby="voice-hint">开始说话</button>
-            <p id="voice-hint" class="voice-hint">点一下就能说，不用一直按住。</p>
-            <label for="text-input" class="input-label">也可以打字告诉我</label>
-            <div class="input-row">
-              <input id="text-input" type="text" autocomplete="off" maxlength="500" placeholder="例如：帮我预约门诊" />
-              <button id="send-btn" type="button">发送</button>
-            </div>
-          </div>
-          <div id="interaction-status" role="status" aria-live="polite">准备好了，您可以说话，也可以打字。</div>
-          <div id="messages" role="log" aria-label="您与小安的对话" aria-live="polite" aria-relevant="additions"></div>
-          <div id="quick-replies" aria-label="按提示选择下一步"></div>
-          <p class="chat-footnote">这里的提醒和预约为演示，不会产生真实挂号。</p>
-        </section>
+      <div id="messages" class="conversation-overlay" role="log" aria-label="最近的对话气泡" aria-live="polite" aria-relevant="additions"></div>
+      <div class="avatar-actions">
+        <button id="enlarge-avatar-btn" type="button" class="utility-button" hidden>放大人物</button>
+        <button id="reset-view-btn" type="button" class="utility-button" hidden>恢复全身</button>
       </div>
-
-      <section id="help" class="help-section" aria-labelledby="help-title">
-        <h2 id="help-title">第一次用？这样就可以。</h2>
-        <div class="help-steps">
-          <p><strong>点一下「开始说话」</strong><span>允许使用麦克风后，正常说话就好。</span></p>
-          <p><strong>说出您的需要</strong><span>比如「我最近头晕」或「帮我预约」。</span></p>
-          <p><strong>跟着提示选下一步</strong><span>没有听清也没关系，可以再说一次或打字。</span></p>
+      <section class="interaction-dock" aria-label="和小安对话">
+        <div id="interaction-status" role="status" aria-live="polite">我在这里，您可以随时和我说话。</div>
+        <div id="quick-replies" aria-label="按提示选择下一步"></div>
+        <div class="composer">
+          <div class="voice-control"><button id="voice-btn" type="button" aria-pressed="false" aria-describedby="voice-hint">开始说话</button><p id="voice-hint">点一下就能说，不用一直按住。</p></div>
+          <div class="input-row"><label for="text-input" class="visually-hidden">也可以打字告诉我</label><input id="text-input" type="text" maxlength="500" autocomplete="off" placeholder="也可以打字告诉我…" /><button id="send-btn" type="button">发送</button></div>
         </div>
+        <nav class="service-grid" aria-label="常用健康服务"><button type="button" data-service="健康查询">问问健康</button><button type="button" data-service="查看健康预警">查看提醒</button><button type="button" data-service="预约门诊">预约服务</button><button id="help-btn" type="button">帮助与设置</button></nav>
       </section>
-      <details class="demo-settings">
-        <summary>演示人员设置</summary>
-        <div class="settings">
-          <div class="model-status"><strong id="model-status-title">数字人形象尚未载入</strong><p id="model-status-detail">载入模型后，小安会显示在左侧独立区域。</p></div>
-          <div class="settings-buttons">
-            <button class="secondary-btn" id="load-btn" type="button">载入数字人（.vrm）</button>
-            <button class="secondary-btn" id="wave-btn" type="button">测试挥手</button>
-            <button class="secondary-btn" id="anim-btn" type="button">载入动作（.vrma）</button>
-          </div>
-          <input type="file" id="vrm-file" accept=".vrm" />
-          <input type="file" id="vrm-anim-file" accept=".vrma" />
-        </div>
-      </details>
     </main>
-    <footer><span>安心 · 陪您把健康的事办好</span><span>健康建议仅供参考，不能替代医生诊断。</span></footer>
   </div>
+  <dialog id="history-dialog" class="utility-dialog" aria-labelledby="history-title"><header><h2 id="history-title">对话记录</h2><button id="close-history-btn" class="utility-button" autofocus>返回对话</button></header><div id="history-messages"></div><p class="dialog-note">提醒与预约为本地演示，不会真实挂号。健康建议不能替代医生诊断。</p></dialog>
+  <dialog id="help-dialog" class="utility-dialog" aria-labelledby="help-title"><header><h2 id="help-title">帮助与设置</h2><button id="close-help-btn" class="utility-button" autofocus>返回对话</button></header><p>点一下「开始说话」，允许麦克风后正常说话即可。也可以直接选择健康服务，按提示一步步完成。</p><p>想安静一点，可以点击「减少动态」；看不清文字，可以点击「放大文字」。</p><p>本系统的提醒和预约均为演示，不会真实挂号。健康建议不能替代医生诊断。</p><details><summary>演示人员设置</summary><strong id="model-status-title">正在加载默认形象</strong><p id="model-status-detail">数字人将显示在舞台中央。</p><div class="settings-buttons"><button id="load-btn" class="utility-button">载入数字人（.vrm）</button><button id="wave-btn" class="utility-button">测试挥手</button><button id="anim-btn" class="utility-button">载入动作（.vrma）</button></div><input type="file" id="vrm-file" accept=".vrm" /><input type="file" id="vrm-anim-file" accept=".vrma" /></details></dialog>
   <dialog id="avatar-dialog" class="avatar-dialog" aria-labelledby="avatar-dialog-title">
     <header><h2 id="avatar-dialog-title">小安 · 全身展示</h2><button id="close-avatar-btn" class="utility-button" type="button" autofocus>返回对话</button></header>
     <div id="avatar-large-stage"></div>
   </dialog>
-  <script type="module" src="./js/VRMCharacter.js"></script>
+  <script type="module" src="./js/VRMCharacter.js?v=side-5"></script>
 </body>
 </html>

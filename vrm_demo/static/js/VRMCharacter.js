@@ -28,6 +28,8 @@ const elements = {
 const serviceButtons = [...document.querySelectorAll('[data-service]')];
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 
+let motionReduced = Boolean(reducedMotion?.matches);
+const recentMessages = new Map();
 let renderer;
 let scene;
 let camera;
@@ -127,7 +129,7 @@ function fitAvatar() {
   const verticalFov = THREE.MathUtils.degToRad(camera.fov);
   const verticalDistance = size.y / (2 * Math.tan(verticalFov / 2));
   const horizontalDistance = size.x / (2 * Math.tan(verticalFov / 2) * camera.aspect);
-  const distance = Math.max(verticalDistance, horizontalDistance) * 1.08 + size.z / 2;
+  const distance = Math.max(verticalDistance, horizontalDistance) * 1.035 + size.z / 2;
   controls.target.copy(center);
   camera.position.set(center.x, center.y, center.z + distance);
   camera.near = Math.max(0.01, distance / 100);
@@ -140,6 +142,28 @@ function fitAvatar() {
 }
 
 function bindUI() {
+  const motionButton = document.getElementById('motion-btn');
+  const applyMotion = () => {
+    document.documentElement.classList.toggle('motion-reduced', motionReduced);
+    motionButton.setAttribute('aria-pressed', String(motionReduced));
+    motionButton.textContent = motionReduced ? '动态已减少' : '减少动态';
+  };
+  motionButton.addEventListener('click', () => { motionReduced = !motionReduced; applyMotion(); });
+  reducedMotion?.addEventListener('change', (event) => { motionReduced = event.matches; applyMotion(); });
+  applyMotion();
+  for (const name of ['history', 'help']) {
+    const panel = document.getElementById(name + '-dialog');
+    const trigger = document.getElementById(name + '-btn');
+    trigger.addEventListener('click', () => panel.showModal());
+    document.getElementById('close-' + name + '-btn').addEventListener('click', () => panel.close());
+    panel.addEventListener('close', () => trigger.focus());
+  }
+  if (typeof ResizeObserver !== 'undefined') {
+    const dock = document.querySelector('.interaction-dock');
+    new ResizeObserver(() => {
+      document.documentElement.style.setProperty('--dock-height', dock.getBoundingClientRect().height + 'px');
+    }).observe(dock);
+  }
   elements.loadButton.addEventListener('click', () => elements.fileInput.click());
   elements.fileInput.addEventListener('change', (event) => {
     const [file] = event.target.files;
@@ -272,17 +296,31 @@ function setInteractionStatus(text, className = '') {
 }
 
 function addMessage(text, isUser, note = '') {
-  const message = document.createElement('div');
-  message.className = `msg ${isUser ? 'user' : 'ai'}`;
-  message.textContent = text;
-  if (note) {
-    const detail = document.createElement('span');
-    detail.className = 'msg-note';
-    detail.textContent = note;
-    message.appendChild(detail);
-  }
+  const createMessage = () => {
+    const message = document.createElement('div');
+    message.className = `msg ${isUser ? 'user' : 'ai'}`;
+    message.tabIndex = 0;
+    const label = document.createElement('span');
+    label.className = 'speaker-label';
+    label.textContent = isUser ? '您' : '小安';
+    const content = document.createElement('div');
+    content.textContent = text;
+    message.appendChild(label);
+    message.appendChild(content);
+    if (note) {
+      const detail = document.createElement('span');
+      detail.className = 'msg-note';
+      detail.textContent = note;
+      message.appendChild(detail);
+    }
+    return message;
+  };
+  document.getElementById('history-messages').appendChild(createMessage());
+  const previous = recentMessages.get(isUser);
+  if (previous) previous.remove();
+  const message = createMessage();
+  recentMessages.set(isUser, message);
   elements.messages.appendChild(message);
-  elements.messages.scrollTop = elements.messages.scrollHeight;
 }
 
 function renderQuickReplies(replies = []) {
@@ -666,8 +704,8 @@ function updateAvatar(delta) {
   } else {
     const head = getBone('head');
     if (head) {
-      head.rotation.y = reducedMotion?.matches ? 0 : Math.sin(now * 0.0006) * 0.06;
-      head.rotation.x = speaking && !reducedMotion?.matches ? Math.sin(now * 0.01) * 0.03 : 0;
+      head.rotation.y = motionReduced ? 0 : Math.sin(now * 0.0006) * 0.06;
+      head.rotation.x = speaking && !motionReduced ? Math.sin(now * 0.01) * 0.03 : 0;
     }
     updateWave(now);
   }

@@ -11,7 +11,7 @@ function frontend() {
     setAttribute(name, value) { this.attributes[name] = value; },
     addEventListener(name, handler) { this.handlers[name] = handler; },
     querySelectorAll() { return []; }, scrollIntoView() {},
-    appendChild() {}, replaceChildren() {}, focus() {}, disabled: false,
+    children: [], appendChild(child) { this.children.push(child); child.parent = this; }, remove() { this.parent.children = this.parent.children.filter(child => child !== this); }, replaceChildren() { this.children = []; }, focus() {}, disabled: false,
   });
   const elements = new Map();
   const service = { ...element(), dataset: { service: '预约门诊' } };
@@ -19,7 +19,8 @@ function frontend() {
   const sandbox = {
     document: {
       querySelectorAll() { return [service]; },
-      documentElement: { classList: { toggle(name) {
+      documentElement: { classList: { toggle(name, force) {
+        if (force !== undefined) { if (force) classes.add(name); else classes.delete(name); return force; }
         if (classes.has(name)) { classes.delete(name); return false; }
         classes.add(name); return true;
       } } },
@@ -165,4 +166,25 @@ test('browser speech animates the mouth and resets it on completion', async () =
   utterance.onend();
   assert.equal(await playback, true);
   assert.ok(['aa', 'ih', 'ou', 'ee', 'oh'].every((v) => values[v] === 0));
+});
+
+
+test('recent bubbles stay limited while history retains every message', () => {
+  const f = frontend();
+  f.run("addMessage('first', true); addMessage('reply', false); addMessage('second', true);");
+  assert.equal(f.elements.get('messages').children.length, 2);
+  assert.equal(f.elements.get('history-messages').children.length, 4);
+  assert.equal(f.elements.get('messages').children[1].children[1].textContent, 'second');
+});
+
+test('motion control pauses ambient and avatar motion reversibly', () => {
+  const f = frontend();
+  const button = f.elements.get('motion-btn');
+  button.handlers.click();
+  assert.equal(f.run('motionReduced'), true);
+  assert.ok(f.classes.has('motion-reduced'));
+  assert.equal(button.attributes['aria-pressed'], 'true');
+  button.handlers.click();
+  assert.equal(f.run('motionReduced'), false);
+  assert.equal(f.classes.has('motion-reduced'), false);
 });
