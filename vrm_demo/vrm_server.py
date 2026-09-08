@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import json
@@ -14,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 try:
     import edge_tts
@@ -38,6 +40,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
+TTS_TIMEOUT_SECONDS = 15
+SEGMENT_CONCURRENCY = 3
 DEPARTMENTS = ["内科", "外科", "康复科", "体检中心"]
 APPOINTMENT_TIMES = ["明天上午", "明天下午", "后天上午"]
 
@@ -101,14 +105,14 @@ RHUBARB_TO_VISEME = {
 def mp3_to_wav(mp3_bytes, wav_path):
     if av is None:
         raise RuntimeError("PyAV not available")
-    container = av.open(io.BytesIO(mp3_bytes))
-    stream = container.streams.audio[0]
     resampler = av.AudioResampler(format='s16', layout='mono', rate=16000)
     pcm = bytearray()
-    for frame in container.decode(stream):
-        for f in resampler.resample(frame):
+    with av.open(io.BytesIO(mp3_bytes)) as container:
+        for frame in container.decode(container.streams.audio[0]):
+            for f in resampler.resample(frame):
+                pcm.extend(f.to_ndarray().tobytes())
+        for f in resampler.resample(None):
             pcm.extend(f.to_ndarray().tobytes())
-    container.close()
     with wave.open(wav_path, 'wb') as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
@@ -123,6 +127,7 @@ def rhubarb_analyze(wav_path):
         result = subprocess.run(
             [RHUBARB_PATH, "-r", "phonetic", "-f", "json", "--consoleLevel", "fatal", wav_path],
             capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if result.returncode != 0:
             return []
@@ -137,6 +142,17 @@ def build_viseme_timeline(mouth_cues):
         {"start": c["start"], "end": c["end"], "viseme": RHUBARB_TO_VISEME.get(c["value"])}
         for c in mouth_cues
     ]
+
+
+def analyze_audio(audio):
+    """Run decoding and Rhubarb in a worker, with worker-owned temp files."""
+    if av is None or not os.path.isfile(RHUBARB_PATH):
+        return []
+    # The worker owns cleanup even if the HTTP request is cancelled.
+    with tempfile.TemporaryDirectory(prefix="vrm-lipsync-") as directory:
+        wav_path = os.path.join(directory, "speech.wav")
+        mp3_to_wav(audio, wav_path)
+        return build_viseme_timeline(rhubarb_analyze(wav_path))
 
 
 class ChatRequest(BaseModel):
@@ -183,6 +199,9 @@ def build_reply(text: str, context: Dict[str, str] | None = None):
     flow = state.get("flow")
     step = state.get("step")
 
+    if flow == "appointment" and any(word in message for word in ["取消", "退出", "不预约了", "不挂号了"]):
+        return _result("本次模拟预约已取消。您还可以继续咨询其他服务。", "confirm")
+
     if flow == "alert":
         if any(word in message for word in ["已确认", "知道了", "确认"]):
             return _result(
@@ -206,13 +225,13 @@ def build_reply(text: str, context: Dict[str, str] | None = None):
             return _result(
                 f"已选择{department}。您希望预约哪个时间？",
                 "booking",
-                APPOINTMENT_TIMES,
+                APPOINTMENT_TIMES + ["取消预约"],
                 {"flow": "appointment", "step": "time", "department": department},
             )
         return _result(
             "我还没有听清科室。请选择内科、外科、康复科或体检中心。",
             "booking",
-            DEPARTMENTS,
+            DEPARTMENTS + ["取消预约"],
             state,
         )
 
@@ -231,18 +250,16 @@ def build_reply(text: str, context: Dict[str, str] | None = None):
                     "time": appointment_time,
                 },
             )
-        return _result("请选择一个预约时间。", "booking", APPOINTMENT_TIMES, state)
+        return _result("请选择一个预约时间。", "booking", APPOINTMENT_TIMES + ["取消预约"], state)
 
     if flow == "appointment" and step == "final_confirm":
         if "重新" in message:
             return _result(
                 "好的，请重新选择科室。",
                 "booking",
-                DEPARTMENTS,
+                DEPARTMENTS + ["取消预约"],
                 {"flow": "appointment", "step": "department"},
             )
-        if "取消" in message:
-            return _result("本次模拟预约已取消。您还可以继续咨询其他服务。", "confirm")
         if "确认" in message:
             department = state.get("department", "所选科室")
             appointment_time = state.get("time", "所选时间")
@@ -269,7 +286,7 @@ def build_reply(text: str, context: Dict[str, str] | None = None):
         return _result(
             "好的，我们先选择科室。这是本地流程演示，不会连接医院或真实挂号。",
             "booking",
-            DEPARTMENTS,
+            DEPARTMENTS + ["取消预约"],
             {"flow": "appointment", "step": "department"},
         )
 
@@ -332,37 +349,34 @@ async def health():
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     result = build_reply(req.text, req.context)
-    segments = []
-    for sentence in split_sentence(result["reply"]):
-        audio = b""
-        try:
-            audio = await tts_to_mp3(sentence)
-        except Exception as error:
-            print("tts error:", error)
-        audio_base64 = base64.b64encode(audio).decode("utf-8") if audio else ""
-        viseme_timeline = []
-        if audio and av is not None:
-            wav_path = None
+    semaphore = asyncio.Semaphore(SEGMENT_CONCURRENCY)
+
+    async def make_segment(sentence):
+        async with semaphore:
+            audio = b""
             try:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
-                    wav_path = tf.name
-                mp3_to_wav(audio, wav_path)
-                viseme_timeline = build_viseme_timeline(rhubarb_analyze(wav_path))
+                audio = await asyncio.wait_for(tts_to_mp3(sentence), timeout=TTS_TIMEOUT_SECONDS)
             except Exception as error:
-                print("lipsync error:", error)
-            finally:
-                if wav_path and os.path.isfile(wav_path):
-                    os.unlink(wav_path)
-        segments.append({
-            "text": sentence,
-            "audio": audio_base64,
-            "visemes": text_to_visemes(sentence),
-            "visemeTimeline": viseme_timeline,
-        })
+                print("tts error:", error)
+            audio_base64 = base64.b64encode(audio).decode("utf-8") if audio else ""
+            viseme_timeline = []
+            if audio:
+                try:
+                    viseme_timeline = await run_in_threadpool(analyze_audio, audio)
+                except Exception as error:
+                    print("lipsync error:", error)
+            return {
+                "text": sentence,
+                "audio": audio_base64,
+                "visemes": text_to_visemes(sentence),
+                "visemeTimeline": viseme_timeline,
+            }
+    # gather preserves sentence order even when synthesis finishes out of order.
+    segments = await asyncio.gather(*(make_segment(sentence) for sentence in split_sentence(result["reply"])))
     return {
         **result,
         "segments": segments,
-        "tts_available": edge_tts is not None,
+        "tts_available": any(segment["audio"] for segment in segments),
     }
 
 

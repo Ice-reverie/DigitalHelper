@@ -36,11 +36,8 @@ let waveState = null;
 let conversationContext = {};
 
 let audioContext = null;
-let currentAnalyser = null;
-let timeData = new Uint8Array(0);
 let speaking = false;
-let lastVowelSwitch = 0;
-let currentVowel = 'aa';
+let browserSpeaking = false;
 const VOWELS = ['aa', 'ih', 'ou', 'ee', 'oh'];
 const WAVE_DURATION = 2600;
 
@@ -147,7 +144,7 @@ async function checkService() {
     const response = await fetch('/api/health');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    elements.systemState.textContent = data.tts_available ? '服务正常 · 在线语音' : '服务正常 · 浏览器语音';
+    elements.systemState.textContent = data.tts_available ? '服务正常 · 在线语音已配置' : '服务正常 · 浏览器语音';
   } catch (error) {
     elements.systemState.textContent = '服务连接异常';
   }
@@ -249,7 +246,7 @@ async function sendMessage(providedText = '') {
   elements.voiceButton.disabled = true;
   renderQuickReplies();
   setInteractionStatus('正在为您处理，请稍候……');
-  initAudioContext();
+  initAudioContext().catch((error) => console.warn('音频初始化失败，将尝试浏览器播报。', error));
 
   try {
     const response = await fetch('/api/chat', {
@@ -266,9 +263,11 @@ async function sendMessage(providedText = '') {
     renderQuickReplies(data.quick_replies || []);
     handleAction(data.action);
 
-    const audioPlayed = await playSegments(data.segments || []);
-    if (!audioPlayed) speakWithBrowser(data.reply);
-    setInteractionStatus('办理完成，您可以继续说出下一项需要。');
+    const playback = await playSegments(data.segments?.length ? data.segments : [{ text: data.reply }]);
+    setInteractionStatus(
+      playback.failed ? '部分语音暂时无法播放，请查看上方文字回复。' : '办理完成，您可以继续说出下一项需要。',
+      playback.failed ? 'warning' : '',
+    );
   } catch (error) {
     console.error('请求失败：', error);
     addMessage('抱歉，服务暂时没有响应。请确认后端已经启动，再试一次。', false);
@@ -403,13 +402,12 @@ function startWave() {
   if (!waveState) waveState = { start: performance.now() };
 }
 
-function initAudioContext() {
+async function initAudioContext() {
   if (!audioContext) {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (AudioContext) audioContext = new AudioContext();
-  } else if (audioContext.state === 'suspended') {
-    audioContext.resume();
   }
+  if (audioContext?.state === 'suspended') await audioContext.resume();
 }
 
 function base64ToArrayBuffer(base64) {
@@ -427,25 +425,35 @@ function base64ToBlob(base64, type) {
 }
 
 async function playSegments(segments) {
-  const audioSegments = segments.filter((segment) => segment.audio);
-  if (!audioSegments.length) return false;
-
-  speaking = true;
-  for (const segment of audioSegments) {
-    try {
-      initAudioContext();
-      const buffer = await audioContext.decodeAudioData(base64ToArrayBuffer(segment.audio));
-      await playAudioWithVisemes(buffer, segment.visemeTimeline || []);
-    } catch (error) {
-      console.error('音频播放失败：', error);
+  const result = { played: 0, failed: 0 };
+  for (const segment of segments) {
+    let played = false;
+    if (segment.audio) {
+      try {
+        await initAudioContext();
+        if (!audioContext) throw new Error('Web Audio unavailable');
+        const buffer = await audioContext.decodeAudioData(base64ToArrayBuffer(segment.audio));
+        speaking = true;
+        await playAudioWithVisemes(buffer, segment.visemeTimeline || []);
+        played = true;
+      } catch (error) {
+        console.error('音频播放失败，尝试浏览器播报：', error);
+      } finally {
+        speaking = false;
+        currentVisemes = null;
+        VOWELS.forEach((v) => setExpression(v, 0));
+      }
     }
+    // Fall back per sentence: preserve order and never skip missing audio.
+    if (!played && segment.text) played = await speakWithBrowser(segment.text);
+    if (played) result.played += 1;
+    else result.failed += 1;
   }
-  speaking = false;
-  return true;
+  return result;
 }
 
 function playAudioWithVisemes(buffer, timeline) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
     const analyser = audioContext.createAnalyser();
@@ -463,24 +471,44 @@ function playAudioWithVisemes(buffer, timeline) {
       samples: new Uint8Array(analyser.frequencyBinCount),
     };
     source.onended = () => {
+      source.disconnect();
+      analyser.disconnect();
       currentVisemes = null;
       VOWELS.forEach((v) => setExpression(v, 0));
       resolve();
     };
-    source.start();
+    try {
+      source.start();
+    } catch (error) {
+      source.disconnect();
+      analyser.disconnect();
+      currentVisemes = null;
+      reject(error);
+    }
   });
 }
 
 function speakWithBrowser(text) {
-  if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'zh-CN';
-  utterance.rate = 0.9;
-  utterance.onstart = () => { speaking = true; };
-  utterance.onend = () => { speaking = false; };
-  utterance.onerror = () => { speaking = false; };
-  window.speechSynthesis.speak(utterance);
+  return new Promise((resolve) => {
+    if (!('speechSynthesis' in window)) { resolve(false); return; }
+    const finish = (success) => {
+      speaking = false;
+      browserSpeaking = false;
+      VOWELS.forEach((v) => setExpression(v, 0));
+      resolve(success);
+    };
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'zh-CN';
+      utterance.rate = 0.9;
+      utterance.onstart = () => { speaking = true; browserSpeaking = true; };
+      utterance.onend = () => finish(true);
+      utterance.onerror = () => finish(false);
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      finish(false);
+    }
+  });
 }
 
 function getBone(name) {
@@ -513,7 +541,9 @@ function updateAvatar(delta) {
     while (index + 1 < timeline.length && timeline[index + 1].start <= elapsed) index += 1;
     if (index < 0 && timeline.length && timeline[0].start <= elapsed) index = 0;
     currentVisemes.lastIndex = index;
-    const target = index >= 0 ? timeline[index].viseme : null;
+    const target = timeline.length
+      ? (index >= 0 && elapsed < timeline[index].end ? timeline[index].viseme : null)
+      : VOWELS[Math.floor(elapsed / 0.13) % VOWELS.length];
     currentVisemes.analyser.getByteTimeDomainData(currentVisemes.samples);
     let sum = 0;
     for (let i = 0; i < currentVisemes.samples.length; i += 1) {
@@ -533,6 +563,11 @@ function updateAvatar(delta) {
         VOWELS.forEach((v) => setExpression(v, 0));
       }
     }
+  } else if (browserSpeaking) {
+    // Browser speech exposes no PCM: approximate articulation while it speaks.
+    const target = VOWELS[Math.floor(now / 130) % VOWELS.length];
+    const open = 0.12 + Math.abs(Math.sin(now * 0.012)) * 0.28;
+    VOWELS.forEach((v) => setExpression(v, v === target ? open : 0));
   }
   if (activeAction && mixer) {
     mixer.update(delta);
