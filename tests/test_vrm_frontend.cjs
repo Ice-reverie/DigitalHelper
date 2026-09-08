@@ -71,7 +71,10 @@ test('full-body framing fits both portrait and landscape without excessive empty
     const occupancy = Math.max(1.7 / visibleHeight, 0.7 / (visibleHeight * aspect));
     assert.ok(occupancy <= 1 && occupancy > 0.85);
     assert.equal(camera.position.y, 0.85);
-    assert.equal(f.run('controls.minDistance'), camera.position.z);
+    assert.ok(f.run('controls.minDistance') < camera.position.z * 0.5);
+    const fullBodyDistance = camera.position.z;
+    f.run('camera.position.z = controls.minDistance; fitAvatar();');
+    assert.equal(camera.position.z, fullBodyDistance);
   }
 });
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#fafbf8" />
   <title>安心健康助手 · 慢慢说，我在听</title>
-  <link rel="stylesheet" href="./css/companion.css?v=idle-6" />
+  <link rel="stylesheet" href="./css/companion.css?v=controls-9" />
   <script type="importmap">
     {
       "imports": {
@@ -40,7 +40,6 @@
       </section>
       <div id="messages" class="conversation-overlay" role="log" aria-label="最近的对话气泡" aria-live="polite" aria-relevant="additions"></div>
       <div class="avatar-actions">
-        <button id="enlarge-avatar-btn" type="button" class="utility-button" hidden>放大人物</button>
         <button id="reset-view-btn" type="button" class="utility-button" hidden>恢复全身</button>
       </div>
       <section class="interaction-dock" aria-label="和小安对话">
@@ -55,11 +54,7 @@
     </main>
   </div>
   <dialog id="history-dialog" class="utility-dialog" aria-labelledby="history-title"><header><h2 id="history-title">对话记录</h2><button id="close-history-btn" class="utility-button" autofocus>返回对话</button></header><div id="history-messages"></div><p class="dialog-note">提醒与预约为本地演示，不会真实挂号。健康建议不能替代医生诊断。</p></dialog>
-  <dialog id="help-dialog" class="utility-dialog" aria-labelledby="help-title"><header><h2 id="help-title">帮助与设置</h2><button id="close-help-btn" class="utility-button" autofocus>返回对话</button></header><p>点一下「开始说话」，允许麦克风后正常说话即可。也可以直接选择健康服务，按提示一步步完成。</p><p>想安静一点，可以点击「减少动态」；看不清文字，可以点击「放大文字」。</p><p>本系统的提醒和预约均为演示，不会真实挂号。健康建议不能替代医生诊断。</p><details><summary>演示人员设置</summary><strong id="model-status-title">正在加载默认形象</strong><p id="model-status-detail">数字人将显示在舞台中央。</p><div class="settings-buttons"><button id="load-btn" class="utility-button">载入数字人（.vrm）</button><button id="wave-btn" class="utility-button">测试挥手</button><button id="anim-btn" class="utility-button">载入动作（.vrma）</button></div><input type="file" id="vrm-file" accept=".vrm" /><input type="file" id="vrm-anim-file" accept=".vrma" /></details></dialog>
-  <dialog id="avatar-dialog" class="avatar-dialog" aria-labelledby="avatar-dialog-title">
-    <header><h2 id="avatar-dialog-title">小安 · 全身展示</h2><button id="close-avatar-btn" class="utility-button" type="button" autofocus>返回对话</button></header>
-    <div id="avatar-large-stage"></div>
-  </dialog>
-  <script type="module" src="./js/VRMCharacter.js?v=idle-6"></script>
+  <dialog id="help-dialog" class="utility-dialog" aria-labelledby="help-title"><header><h2 id="help-title">帮助与设置</h2><button id="close-help-btn" class="utility-button" autofocus>返回对话</button></header><p>点一下「开始说话」，允许麦克风后正常说话即可。也可以直接选择健康服务，按提示一步步完成。</p><p>查看人物：鼠标左键拖动可旋转，按住 Shift + 左键拖动可平移，滚轮可缩放。点击「恢复全身」回到默认视角。</p><p>想安静一点，可以点击「减少动态」；看不清文字，可以点击「放大文字」。</p><p>本系统的提醒和预约均为演示，不会真实挂号。健康建议不能替代医生诊断。</p><details><summary>演示人员设置</summary><strong id="model-status-title">正在加载默认形象</strong><p id="model-status-detail">数字人将显示在舞台中央。</p><div class="settings-buttons"><button id="load-btn" class="utility-button">载入数字人（.vrm）</button><button id="wave-btn" class="utility-button">测试挥手</button><button id="anim-btn" class="utility-button">载入动作（.vrma）</button></div><input type="file" id="vrm-file" accept=".vrm" /><input type="file" id="vrm-anim-file" accept=".vrma" /></details></dialog>
+  <script type="module" src="./js/VRMCharacter.js?v=controls-9"></script>
 </body>
 </html>

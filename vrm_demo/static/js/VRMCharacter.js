@@ -97,7 +97,10 @@ function initThree() {
   controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 1.2, 0);
   controls.enableDamping = true;
-  controls.enablePan = false;
+  // OrbitControls maps Shift + left drag to pan and plain left drag to rotate.
+  controls.enablePan = true;
+  controls.screenSpacePanning = true;
+  controls.enableZoom = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 0.5;
   controls.maxDistance = 5;
@@ -147,8 +150,8 @@ function fitAvatar() {
   camera.near = Math.max(0.01, distance / 100);
   camera.far = Math.max(20, distance * 10);
   camera.updateProjectionMatrix();
-  // Never let accidental wheel zoom crop the figure; zooming out remains available.
-  controls.minDistance = distance;
+  // Full-body framing is the reset view, not the closest allowed zoom.
+  controls.minDistance = Math.max(size.z / 2 + 0.1, size.y * 0.6);
   controls.maxDistance = distance * 1.7;
   controls.update();
 }
@@ -213,22 +216,7 @@ function bindUI() {
     elements.fontSizeButton.textContent = large ? '恢复字号' : '放大文字';
   });
   document.getElementById('reset-view-btn').addEventListener('click', fitAvatar);
-  const dialog = document.getElementById('avatar-dialog');
-  const enlarge = document.getElementById('enlarge-avatar-btn');
-  const stageHome = elements.stage.parentElement;
-  enlarge.addEventListener('click', () => {
-    document.getElementById('avatar-large-stage').appendChild(elements.stage);
-    dialog.showModal();
-    document.body.classList.add('avatar-expanded');
-    resizeStage();
-  });
-  document.getElementById('close-avatar-btn').addEventListener('click', () => dialog.close());
-  dialog.addEventListener('close', () => {
-    stageHome.appendChild(elements.stage);
-    document.body.classList.remove('avatar-expanded');
-    resizeStage();
-    enlarge.focus();
-  });
+
 }
 
 async function checkService() {
@@ -465,7 +453,6 @@ function loadVrm(url, name, release = () => {}) {
       elements.avatarPlaceholder.hidden = true;
       setModelStatus('3D 模型已加载', '可以测试挥手和对话');
       document.getElementById('reset-view-btn').hidden = false;
-      document.getElementById('enlarge-avatar-btn').hidden = false;
     },
     (progress) => {
       if (loadId !== modelLoadId) return;
