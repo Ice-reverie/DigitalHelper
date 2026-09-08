@@ -106,12 +106,18 @@ function initThree() {
   controls.maxDistance = 5;
   controls.update();
 
-  scene.add(new THREE.AmbientLight(0xffffff, 1.05));
-  const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
-  keyLight.position.set(0.5, 1.5, 1.5);
+  // Bright, neutral fill keeps the face readable while the offset key adds shape.
+  scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+  const keyLight = new THREE.DirectionalLight(0xfffaf5, 1.4);
+  keyLight.position.set(-1.8, 2.3, 2.4);
+  keyLight.target.position.set(0, 1.05, 0);
+  scene.add(keyLight.target);
   scene.add(keyLight);
-  const rimLight = new THREE.DirectionalLight(0x8fb8ff, 0.6);
-  rimLight.position.set(-1, 1, -1);
+  const fillLight = new THREE.DirectionalLight(0xf4f7ff, 0.5);
+  fillLight.position.set(2, 1.4, 1.6);
+  scene.add(fillLight);
+  const rimLight = new THREE.DirectionalLight(0xc5d8ff, 0.3);
+  rimLight.position.set(0.8, 1.8, -2);
   scene.add(rimLight);
 
   clock = new THREE.Clock();
@@ -430,6 +436,7 @@ function loadVrm(url, name, release = () => {}) {
       }
       VRMUtils.removeUnnecessaryJoints(gltf.scene);
       VRMUtils.rotateVRM0(vrm);
+      if (url.startsWith('/api/avatar')) tuneCompanionFace(vrm);
       if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
       currentVrm = vrm;
       idleAnimation = null;
@@ -467,6 +474,23 @@ function loadVrm(url, name, release = () => {}) {
       setModelStatus('模型加载失败', '请确认所选文件是有效的 .vrm 模型');
     },
   );
+}
+
+function tuneCompanionFace(vrm) {
+  const seen = new Set();
+  vrm.scene.traverse((object) => {
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material || seen.has(material)) continue;
+      seen.add(material);
+      // Only the default character's skin material; preserve eyes, mouth interior and clothing.
+      if (material.name === '2._ko' && material.shadeColorFactor) {
+        material.shadeColorFactor.setRGB(0.98, 0.94, 0.92);
+        material.shadingToonyFactor = 0.55;
+        material.shadingShiftFactor = 0;
+      }
+    }
+  });
 }
 
 function setGazePointer(x, y, width, height) {
