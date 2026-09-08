@@ -263,15 +263,16 @@ test('animation cache shares loads and retries failed resources', async () => {
   await retry;
 });
 
-test('track filtering preserves mouth and gaze ownership, except explicit wink blinking', () => {
+test('full-expression actions keep face tracks; others defer to speech and blink', () => {
   const f = frontend();
   f.run(`sample = { humanoidTracks:{rotation:new Map([['head',{}],['leftEye',{}],['jaw',{}]]),translation:new Map()},
     expressionTracks:{preset:new Map([['aa',{}],['blinkLeft',{}],['happy',{}]]),custom:new Map([['unsupported',{}]])},lookAtTrack:{} };
     model = {expressionManager:{getExpression:n => ['aa','blinkLeft'].includes(n)}};`);
-  assert.equal(f.run("filteredSceneAnimation(sample,'greet',model).expressionTracks.preset.size"),0);
-  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'wink',model).expressionTracks.preset.keys()")),['blinkLeft']);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'greet',model).expressionTracks.preset.keys()")),[]);
   assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'greet',model).humanoidTracks.rotation.keys()")),['head']);
-  assert.equal(f.run("filteredSceneAnimation(sample,'wink',model).lookAtTrack"),null);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'thanks',model).expressionTracks.preset.keys()")),['aa','blinkLeft']);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'thanks',model).humanoidTracks.rotation.keys()")),['head','leftEye','jaw']);
+  assert.equal(f.run("filteredSceneAnimation(sample,'greet',model).lookAtTrack"),null);
 });
 
 test('finished actions release mixer, clear expressions and restore base pose', () => {

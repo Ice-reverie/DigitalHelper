@@ -42,6 +42,10 @@ let idleAnimation = null;
 let gazeTarget = null;
 const gazePointer = { x: 0, y: 0, smoothX: 0, smoothY: 0 };
 const ACTION_LABELS = { greet:'问候', explain:'讲解', alert:'预警提醒', booking:'预约引导', confirm:'确认', thanks:'致谢', wink:'轻松互动' };
+// Actions listed here keep their full facial animation (blink / mouth / eyes).
+// While one plays, auto-blink, lip-sync and gaze are paused, then restored.
+// Add an action name here to give it the same treatment.
+const FULL_EXPRESSION_ACTIONS = new Set(['thanks']);
 const actionCache = new Map();
 let actionRequestId = 0;
 let lastSceneAction = null;
@@ -615,6 +619,18 @@ function createAnimationLoader() {
 }
 
 function filteredSceneAnimation(animation, name, vrm) {
+  if (FULL_EXPRESSION_ACTIONS.has(name)) {
+    return { ...animation, lookAtTrack:null,
+      humanoidTracks: {
+        rotation:new Map(animation.humanoidTracks.rotation),
+        translation:new Map(animation.humanoidTracks.translation),
+      },
+      expressionTracks: {
+        preset:new Map([...animation.expressionTracks.preset].filter(([key]) => vrm.expressionManager?.getExpression(key))),
+        custom:new Map([...animation.expressionTracks.custom].filter(([key]) => vrm.expressionManager?.getExpression(key))),
+      },
+    };
+  }
   const isBlink = key => ['blink', 'blinkLeft', 'blinkRight'].includes(key);
   return { ...animation, lookAtTrack:null,
     humanoidTracks: {
@@ -643,6 +659,7 @@ function stopSceneAnimation() {
   animationRig = null;
   activeAction = null;
   scenePlayback = null;
+  if (currentVrm?.lookAt) currentVrm.lookAt.target = gazeTarget;
   restoreModelPose();
 }
 
@@ -679,10 +696,11 @@ function playVrmAnimation(animation, loopMode, name = 'preview') {
   activeAction.setLoop(THREE.LoopOnce, 1);
   activeAction.clampWhenFinished = true;
   activeAction.play();
-  scenePlayback = { name, elapsed:0, duration:clip.duration, from, bindings,
+  scenePlayback = { name, fullExpression:FULL_EXPRESSION_ACTIONS.has(name), elapsed:0, duration:clip.duration, from, bindings,
     expressions:[...filtered.expressionTracks.preset.keys(), ...filtered.expressionTracks.custom.keys()],
     bases:modelPose.map(p => ({...p, baseRotation:p.rotation.clone(), basePosition:p.position.clone()})),
   };
+  if (scenePlayback.fullExpression && currentVrm?.lookAt) currentVrm.lookAt.target = null;
   if (name === 'wink') { blinking = false; setExpression('blink', 0); }
 }
 
@@ -864,8 +882,8 @@ function updateAvatar(delta) {
   updateSceneAnimation(delta);
   updateGaze(delta);
 
-  if (scenePlayback?.name !== 'wink') updateBlink(now);
-  if (currentVisemes && audioContext) {
+  if (!scenePlayback?.fullExpression) updateBlink(now);
+  if (!scenePlayback?.fullExpression && currentVisemes && audioContext) {
     const elapsed = audioContext.currentTime - currentVisemes.startTime;
     const timeline = currentVisemes.timeline;
     let index = currentVisemes.lastIndex;
@@ -894,7 +912,7 @@ function updateAvatar(delta) {
         VOWELS.forEach((v) => setExpression(v, 0));
       }
     }
-  } else if (browserSpeaking) {
+  } else if (!scenePlayback?.fullExpression && browserSpeaking) {
     // Browser speech exposes no PCM: approximate articulation while it speaks.
     const target = VOWELS[Math.floor(now / 130) % VOWELS.length];
     const open = 0.12 + Math.abs(Math.sin(now * 0.012)) * 0.28;
