@@ -38,6 +38,9 @@ let controls;
 let currentVrm = null;
 let avatarBounds = null;
 let modelLoadId = 0;
+let idleAnimation = null;
+let gazeTarget = null;
+const gazePointer = { x: 0, y: 0, smoothX: 0, smoothY: 0 };
 let mixer = null;
 let activeAction = null;
 let waveState = null;
@@ -77,6 +80,15 @@ function initThree() {
   elements.stage.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
+  gazeTarget = new THREE.Object3D();
+  scene.add(gazeTarget);
+  window.addEventListener('pointermove', (event) => {
+    setGazePointer(event.clientX, event.clientY, window.innerWidth, window.innerHeight);
+  });
+  const resetGaze = () => { gazePointer.x = 0; gazePointer.y = 0; };
+  document.documentElement.addEventListener('pointerleave', resetGaze);
+  window.addEventListener('blur', resetGaze);
+  window.addEventListener('pointerup', (event) => { if (event.pointerType === 'touch') resetGaze(); });
 
   camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
   camera.position.set(0, 1.35, 1.7);
@@ -105,7 +117,7 @@ function initThree() {
   resizeStage();
 
   renderer.setAnimationLoop(() => {
-    const delta = clock.getDelta();
+    const delta = Math.min(clock.getDelta(), 0.05);
     controls.update();
     updateAvatar(delta);
     renderer.render(scene, camera);
@@ -432,6 +444,7 @@ function loadVrm(url, name, release = () => {}) {
       VRMUtils.rotateVRM0(vrm);
       if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
       currentVrm = vrm;
+      idleAnimation = null;
       mixer = null;
       activeAction = null;
       scene.add(vrm.scene);
@@ -445,7 +458,10 @@ function loadVrm(url, name, release = () => {}) {
       vrm.scene.traverse((object) => { if (object.isSkinnedMesh) object.skeleton.update(); });
       avatarBounds = new THREE.Box3().setFromObject(vrm.scene, true);
       fitAvatar();
-      if (vrm.lookAt) vrm.lookAt.target = camera;
+      if (vrm.lookAt) vrm.lookAt.target = gazeTarget;
+      nextBlinkAt = performance.now() + 2200;
+      blinking = false;
+      if (url.startsWith('/api/avatar')) loadDefaultIdle(gltf, vrm, loadId);
       elements.avatarPlaceholder.hidden = true;
       setModelStatus('3D 模型已加载', '可以测试挥手和对话');
       document.getElementById('reset-view-btn').hidden = false;
@@ -464,6 +480,61 @@ function loadVrm(url, name, release = () => {}) {
       setModelStatus('模型加载失败', '请确认所选文件是有效的 .vrm 模型');
     },
   );
+}
+
+function setGazePointer(x, y, width, height) {
+  gazePointer.x = Math.max(-1, Math.min(1, 2 * x / Math.max(width, 1) - 1));
+  gazePointer.y = Math.max(-1, Math.min(1, 2 * y / Math.max(height, 1) - 1));
+}
+
+function updateGaze(delta) {
+  if (!gazeTarget || !camera) return;
+  const alpha = 1 - Math.exp(-8 * delta);
+  gazePointer.smoothX += ((motionReduced ? 0 : gazePointer.x) - gazePointer.smoothX) * alpha;
+  gazePointer.smoothY += ((motionReduced ? 0 : gazePointer.y) - gazePointer.smoothY) * alpha;
+  gazeTarget.position.set(gazePointer.smoothX * 1.6, -gazePointer.smoothY * 1.0, 0);
+  gazeTarget.position.applyQuaternion(camera.quaternion).add(camera.position);
+}
+
+function idleSample(time, duration, fps) {
+  const frame = ((time % duration) + duration) % duration * fps;
+  return { index: Math.floor(frame), fraction: frame - Math.floor(frame) };
+}
+
+async function loadDefaultIdle(gltf, vrm, loadId) {
+  try {
+    const response = await fetch('/api/animations/idle');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (data.version !== 1 || !Number.isFinite(data.duration) || data.duration <= 0 || !Number.isFinite(data.fps) || data.fps <= 0) throw new Error('Invalid idle format');
+    const tracks = await Promise.all(data.tracks.map(async (track) => {
+      const node = track.bone ? vrm.humanoid.getNormalizedBoneNode(track.bone) : await gltf.parser.getDependency('node', track.node);
+      if (!node || track.values.length !== (Math.round(data.duration * data.fps) + 1) * 4 || !track.values.every(Number.isFinite)) throw new Error('Invalid idle track');
+      return { ...track, target:node, rest:node.quaternion.clone(), current:new THREE.Quaternion(), next:new THREE.Quaternion() };
+    }));
+    if (loadId !== modelLoadId || vrm !== currentVrm) return;
+    idleAnimation = { ...data, tracks, time:0 };
+    setModelStatus('自然待机已就绪', '头发与衣服轻摆，自动眨眼；眼睛跟随鼠标或触摸位置');
+  } catch (error) {
+    if (loadId !== modelLoadId) return;
+    console.warn('默认待机加载失败', error);
+    setModelStatus('模型已加载', '待机动作暂不可用，仍可正常对话');
+  }
+}
+
+function updateIdle(delta) {
+  if (!idleAnimation) return false;
+  if (!motionReduced) idleAnimation.time += delta;
+  const { index, fraction } = idleSample(idleAnimation.time, idleAnimation.duration, idleAnimation.fps);
+  for (const track of idleAnimation.tracks) {
+    if (activeAction && track.bone) continue;
+    track.current.fromArray(track.values, index * 4);
+    track.next.fromArray(track.values, (index + 1) * 4);
+    track.current.slerp(track.next, fraction);
+    if (track.bone) track.target.quaternion.copy(track.current);
+    else track.target.quaternion.copy(track.rest).multiply(track.current);
+  }
+  return true;
 }
 
 function loadVrmAnimation(file) {
@@ -662,6 +733,8 @@ function setExpression(name, value) {
 function updateAvatar(delta) {
   if (!currentVrm) return;
   const now = performance.now();
+  const hasIdle = updateIdle(delta);
+  updateGaze(delta);
 
   updateBlink(now);
   if (currentVisemes && audioContext) {
@@ -703,7 +776,7 @@ function updateAvatar(delta) {
     mixer.update(delta);
   } else {
     const head = getBone('head');
-    if (head) {
+    if (head && !hasIdle) {
       head.rotation.y = motionReduced ? 0 : Math.sin(now * 0.0006) * 0.06;
       head.rotation.x = speaking && !motionReduced ? Math.sin(now * 0.01) * 0.03 : 0;
     }

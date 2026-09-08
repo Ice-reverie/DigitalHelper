@@ -42,10 +42,18 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 
 @app.get("/api/avatar")
 async def default_avatar():
-    path = os.path.join(BASE_DIR, "..", "models", "Lumine.vrm")
+    path = os.path.join(BASE_DIR, "..", "models", "characters", "Lumine_companion.vrm")
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Default avatar not found")
     return FileResponse(path, media_type="model/gltf-binary")
+
+
+@app.get("/api/animations/idle")
+async def default_idle():
+    path = os.path.join(BASE_DIR, "..", "models", "animations", "Lumine_idle.json")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Default idle animation not found")
+    return FileResponse(path, media_type="application/json")
 
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 TTS_TIMEOUT_SECONDS = 15

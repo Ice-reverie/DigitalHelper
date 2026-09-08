@@ -188,3 +188,33 @@ test('motion control pauses ambient and avatar motion reversibly', () => {
   assert.equal(f.run('motionReduced'), false);
   assert.equal(f.classes.has('motion-reduced'), false);
 });
+
+test('gaze input is bounded and centered for pointer tracking', () => {
+  const f = frontend();
+  f.run('setGazePointer(500, 250, 1000, 500)');
+  assert.equal(f.run('gazePointer.x'), 0);
+  assert.equal(f.run('gazePointer.y'), 0);
+  f.run('setGazePointer(2000, -20, 1000, 500)');
+  assert.equal(f.run('gazePointer.x'), 1);
+  assert.equal(f.run('gazePointer.y'), -1);
+});
+
+test('idle sampling wraps at the loop boundary and reduced motion freezes its clock', () => {
+  const f = frontend();
+  assert.equal(f.run('idleSample(8, 8, 30).index'), 0);
+  assert.equal(f.run('idleSample(7.99, 8, 30).index'), 239);
+  f.run('idleAnimation = { duration:8, fps:30, time:2, tracks:[] }; motionReduced = true; updateIdle(.05)');
+  assert.equal(f.run('idleAnimation.time'), 2);
+  f.run('motionReduced = false; updateIdle(.05)');
+  assert.equal(f.run('idleAnimation.time'), 2.05);
+});
+
+test('blinking closes then reopens both eyes and schedules the next blink', () => {
+  const f = frontend();
+  const values = avatar(f);
+  f.run('nextBlinkAt = 100; updateBlink(100); updateBlink(220)');
+  assert.equal(values.blink, 1);
+  f.run('updateBlink(341)');
+  assert.equal(values.blink, 0);
+  assert.ok(f.run('nextBlinkAt') >= 2541);
+});
