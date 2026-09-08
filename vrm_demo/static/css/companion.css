@@ -1,5 +1,22 @@
 :root { color-scheme: light; --ink:#292c42; --muted:#53566c; --primary:#514579; --line:#ffffffa8; --dock-height:210px; font:18px/1.6 'Microsoft YaHei','PingFang SC',sans-serif; color:var(--ink); background:#eceaf6; }
 * { box-sizing:border-box; }
+/* Quiet glass scrollbars, with a visible thumb for scrolling by mouse. */
+:is(.msg,.interaction-dock,.utility-dialog,#quick-replies,#history-messages) {
+  scrollbar-width:thin;
+  scrollbar-color:#647b8766 transparent;
+}
+@supports selector(::-webkit-scrollbar) {
+  :is(.msg,.interaction-dock,.utility-dialog,#quick-replies,#history-messages) {
+    scrollbar-width:auto;
+    scrollbar-color:auto;
+  }
+  :is(.msg,.interaction-dock,.utility-dialog,#quick-replies,#history-messages)::-webkit-scrollbar { width:7px; height:7px; }
+  :is(.msg,.interaction-dock,.utility-dialog,#quick-replies,#history-messages)::-webkit-scrollbar-track { background:transparent; margin:16px 0; }
+  :is(.msg,.interaction-dock,.utility-dialog,#quick-replies,#history-messages)::-webkit-scrollbar-thumb { background:#647b8752; border-radius:999px; border:1px solid transparent; background-clip:padding-box; }
+  :is(.msg,.interaction-dock,.utility-dialog,#quick-replies,#history-messages)::-webkit-scrollbar-thumb:hover { background-color:#526b8299; }
+  :is(.msg,.interaction-dock,.utility-dialog,#quick-replies,#history-messages)::-webkit-scrollbar-button { display:none; width:0; height:0; }
+  :is(.msg,.interaction-dock,.utility-dialog,#quick-replies,#history-messages)::-webkit-scrollbar-corner { background:transparent; }
+}
 body { margin:0; }
 [hidden] { display:none!important; }
 button,input { font:inherit; }
