@@ -11,8 +11,8 @@ import wave
 from typing import Dict, List
 
 import uvicorn
-from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -38,6 +38,14 @@ app = FastAPI(title="安心健康助手")
 mimetypes.add_type("text/javascript", ".js")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+
+
+@app.get("/api/avatar")
+async def default_avatar():
+    path = os.path.join(BASE_DIR, "..", "models", "Lumine.vrm")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Default avatar not found")
+    return FileResponse(path, media_type="model/gltf-binary")
 
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 TTS_TIMEOUT_SECONDS = 15

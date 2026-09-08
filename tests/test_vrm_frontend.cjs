@@ -6,12 +6,23 @@ const vm = require('node:vm');
 
 function frontend() {
   const element = () => ({
-    classList: { toggle() {} }, setAttribute() {}, addEventListener() {},
+    handlers: {}, attributes: {},
+    classList: { toggle() {} },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener(name, handler) { this.handlers[name] = handler; },
+    querySelectorAll() { return []; }, scrollIntoView() {},
     appendChild() {}, replaceChildren() {}, focus() {}, disabled: false,
   });
   const elements = new Map();
+  const service = { ...element(), dataset: { service: '预约门诊' } };
+  const classes = new Set();
   const sandbox = {
     document: {
+      querySelectorAll() { return [service]; },
+      documentElement: { classList: { toggle(name) {
+        if (classes.has(name)) { classes.delete(name); return false; }
+        classes.add(name); return true;
+      } } },
       getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
       createElement: element,
     },
@@ -27,8 +38,50 @@ function frontend() {
   const source = fs.readFileSync(path.join(__dirname, '../vrm_demo/static/js/VRMCharacter.js'), 'utf8');
   // Browser imports are the only substitution; the real startup and handlers run.
   vm.runInContext(source.replace(/^import .*;\r?\n/gm, ''), context);
-  return { context, sandbox, run: (code) => vm.runInContext(code, context) };
+  return { context, sandbox, elements, service, classes, run: (code) => vm.runInContext(code, context) };
 }
+
+test('large text toggles reversibly with an accessible pressed state', () => {
+  const f = frontend();
+  const button = f.elements.get('font-size-btn');
+  button.handlers.click();
+  assert.ok(f.classes.has('large-text'));
+  assert.equal(button.attributes['aria-pressed'], 'true');
+  button.handlers.click();
+  assert.equal(f.classes.has('large-text'), false);
+  assert.equal(button.attributes['aria-pressed'], 'false');
+});
+
+test('full-body framing fits both portrait and landscape without excessive empty space', () => {
+  for (const aspect of [0.4, 1, 2]) {
+    const f = frontend();
+    f.run(`THREE.Vector3 = class {};
+      THREE.MathUtils = {degToRad: (degrees) => degrees * Math.PI / 180};
+      avatarBounds = {
+        getSize() { return {x:0.7, y:1.7, z:0.3}; },
+        getCenter() { return {x:0, y:0.85, z:0}; },
+      };
+      camera = { fov:30, aspect:${aspect}, position:{set(x,y,z){this.x=x;this.y=y;this.z=z;}}, updateProjectionMatrix(){} };
+      controls = { target:{copy(value){Object.assign(this,value);}}, update(){} };
+      fitAvatar();`);
+    const camera = f.run('camera');
+    const nearestDepth = camera.position.z - 0.15;
+    const visibleHeight = 2 * nearestDepth * Math.tan(Math.PI / 12);
+    const occupancy = Math.max(1.7 / visibleHeight, 0.7 / (visibleHeight * aspect));
+    assert.ok(occupancy <= 1 && occupancy > 0.85);
+    assert.equal(camera.position.y, 0.85);
+    assert.equal(f.run('controls.minDistance'), camera.position.z);
+  }
+});
+
+test('service entry sends the intended request without requiring typing', () => {
+  const f = frontend();
+  let request;
+  f.sandbox.captureRequest = (value, newService) => { request = { value, newService }; };
+  f.run('sendMessage = captureRequest;');
+  f.service.handlers.click();
+  assert.deepEqual(request, { value: '预约门诊', newService: true });
+});
 
 test('missing and undecodable sentences fall back in order without repeating successful audio', async () => {
   const f = frontend();

@@ -22,7 +22,11 @@ const elements = {
   textInput: document.getElementById('text-input'),
   sendButton: document.getElementById('send-btn'),
   voiceButton: document.getElementById('voice-btn'),
+  voiceHint: document.getElementById('voice-hint'),
+  fontSizeButton: document.getElementById('font-size-btn'),
 };
+const serviceButtons = [...document.querySelectorAll('[data-service]')];
+const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 
 let renderer;
 let scene;
@@ -30,6 +34,8 @@ let camera;
 let clock;
 let controls;
 let currentVrm = null;
+let avatarBounds = null;
+let modelLoadId = 0;
 let mixer = null;
 let activeAction = null;
 let waveState = null;
@@ -51,8 +57,9 @@ initThree();
 bindUI();
 initSpeechRecognition();
 checkService();
-addMessage('您好，我是安心健康助手。您可以直接说出需求，我会一步一步协助您。', false);
-renderQuickReplies(['健康查询', '查看健康预警', '预约门诊']);
+addMessage('您好，我是小安。点一下「开始说话」，告诉我哪里不舒服，或需要什么帮助。我会陪您一步步完成。', false);
+renderQuickReplies();
+if (renderer) loadVrm('/api/avatar', '小安的默认形象');
 
 function initThree() {
   try {
@@ -76,6 +83,7 @@ function initThree() {
   controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 1.2, 0);
   controls.enableDamping = true;
+  controls.enablePan = false;
   controls.dampingFactor = 0.08;
   controls.minDistance = 0.5;
   controls.maxDistance = 5;
@@ -109,6 +117,26 @@ function resizeStage() {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height, false);
+  fitAvatar();
+}
+
+function fitAvatar() {
+  if (!avatarBounds || !camera || !controls) return;
+  const size = avatarBounds.getSize(new THREE.Vector3());
+  const center = avatarBounds.getCenter(new THREE.Vector3());
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+  const verticalDistance = size.y / (2 * Math.tan(verticalFov / 2));
+  const horizontalDistance = size.x / (2 * Math.tan(verticalFov / 2) * camera.aspect);
+  const distance = Math.max(verticalDistance, horizontalDistance) * 1.08 + size.z / 2;
+  controls.target.copy(center);
+  camera.position.set(center.x, center.y, center.z + distance);
+  camera.near = Math.max(0.01, distance / 100);
+  camera.far = Math.max(20, distance * 10);
+  camera.updateProjectionMatrix();
+  // Never let accidental wheel zoom crop the figure; zooming out remains available.
+  controls.minDistance = distance;
+  controls.maxDistance = distance * 1.7;
+  controls.update();
 }
 
 function bindUI() {
@@ -137,6 +165,34 @@ function bindUI() {
     if (event.key === 'Enter' && !event.isComposing) sendMessage();
   });
   elements.voiceButton.addEventListener('click', toggleListening);
+  serviceButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      sendMessage(button.dataset.service, true);
+      elements.voiceButton.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    });
+  });
+  elements.fontSizeButton.addEventListener('click', () => {
+    const large = document.documentElement.classList.toggle('large-text');
+    elements.fontSizeButton.setAttribute('aria-pressed', String(large));
+    elements.fontSizeButton.textContent = large ? '恢复字号' : '放大文字';
+  });
+  document.getElementById('reset-view-btn').addEventListener('click', fitAvatar);
+  const dialog = document.getElementById('avatar-dialog');
+  const enlarge = document.getElementById('enlarge-avatar-btn');
+  const stageHome = elements.stage.parentElement;
+  enlarge.addEventListener('click', () => {
+    document.getElementById('avatar-large-stage').appendChild(elements.stage);
+    dialog.showModal();
+    document.body.classList.add('avatar-expanded');
+    resizeStage();
+  });
+  document.getElementById('close-avatar-btn').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', () => {
+    stageHome.appendChild(elements.stage);
+    document.body.classList.remove('avatar-expanded');
+    resizeStage();
+    enlarge.focus();
+  });
 }
 
 async function checkService() {
@@ -144,7 +200,7 @@ async function checkService() {
     const response = await fetch('/api/health');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    elements.systemState.textContent = data.tts_available ? '服务正常 · 在线语音已配置' : '服务正常 · 浏览器语音';
+    elements.systemState.textContent = '已连接，可以对话';
   } catch (error) {
     elements.systemState.textContent = '服务连接异常';
   }
@@ -154,7 +210,8 @@ function initSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
     elements.voiceButton.disabled = true;
-    elements.voiceButton.textContent = '当前浏览器不支持语音输入';
+    elements.voiceButton.textContent = '请使用下方文字输入';
+    elements.voiceHint.textContent = '当前浏览器不支持语音，也可以点选常用服务。';
     setInteractionStatus('您仍可在下方输入文字继续使用。', 'warning');
     return;
   }
@@ -201,8 +258,12 @@ function setListening(value) {
   listening = value;
   elements.voiceButton.classList.toggle('listening', value);
   elements.voiceButton.setAttribute('aria-pressed', String(value));
-  elements.voiceButton.textContent = value ? '■ 结束并发送' : '🎙 开始语音对话';
+  elements.voiceButton.textContent = value ? '说完了，发送' : '开始说话';
+  elements.voiceHint.textContent = value ? '正在听，正常说话就好。说完可再点一下。' : '点一下就能说，不用一直按住。';
   if (value) setInteractionStatus('正在聆听，请说出您的需要……', 'listening');
+  else if (!elements.sendButton.disabled && elements.interactionStatus.className === 'listening') {
+    setInteractionStatus('没有听清，您可以再说一次，也可以打字。');
+  }
 }
 
 function setInteractionStatus(text, className = '') {
@@ -230,13 +291,14 @@ function renderQuickReplies(replies = []) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'quick-btn';
+    button.disabled = elements.sendButton.disabled;
     button.textContent = reply;
     button.addEventListener('click', () => sendMessage(reply));
     elements.quickReplies.appendChild(button);
   });
 }
 
-async function sendMessage(providedText = '') {
+async function sendMessage(providedText = '', startNewService = false) {
   const text = (providedText || elements.textInput.value).trim();
   if (!text || elements.sendButton.disabled) return;
 
@@ -244,6 +306,7 @@ async function sendMessage(providedText = '') {
   elements.textInput.value = '';
   elements.sendButton.disabled = true;
   elements.voiceButton.disabled = true;
+  serviceButtons.forEach((button) => { button.disabled = true; });
   renderQuickReplies();
   setInteractionStatus('正在为您处理，请稍候……');
   initAudioContext().catch((error) => console.warn('音频初始化失败，将尝试浏览器播报。', error));
@@ -252,7 +315,7 @@ async function sendMessage(providedText = '') {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, context: conversationContext }),
+      body: JSON.stringify({ text, context: startNewService ? {} : conversationContext }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -263,9 +326,11 @@ async function sendMessage(providedText = '') {
     renderQuickReplies(data.quick_replies || []);
     handleAction(data.action);
 
+    setInteractionStatus('正在为您朗读，请稍候……');
     const playback = await playSegments(data.segments?.length ? data.segments : [{ text: data.reply }]);
     setInteractionStatus(
-      playback.failed ? '部分语音暂时无法播放，请查看上方文字回复。' : '办理完成，您可以继续说出下一项需要。',
+      playback.failed ? '部分语音暂时无法播放，请查看下方文字回复。'
+        : data.context?.flow ? '请按下方提示，选择下一步。' : '已为您回复，还需要什么帮助？',
       playback.failed ? 'warning' : '',
     );
   } catch (error) {
@@ -276,7 +341,8 @@ async function sendMessage(providedText = '') {
   } finally {
     elements.sendButton.disabled = false;
     elements.voiceButton.disabled = !recognition;
-    elements.textInput.focus();
+    serviceButtons.forEach((button) => { button.disabled = false; });
+    elements.quickReplies.querySelectorAll('button').forEach((button) => { button.disabled = false; });
   }
 }
 
@@ -299,37 +365,63 @@ function setModelStatus(title, detail) {
 }
 
 function loadVrmFromFile(file) {
+  const url = URL.createObjectURL(file);
+  loadVrm(url, file.name, () => URL.revokeObjectURL(url));
+}
+
+function loadVrm(url, name, release = () => {}) {
   if (!renderer) {
+    release();
     setModelStatus('无法加载 3D 模型', '当前设备未启用 WebGL，其他功能仍可使用');
     return;
   }
-  const url = URL.createObjectURL(file);
-  setModelStatus('正在加载 3D 模型…', file.name);
+  const loadId = ++modelLoadId;
+  setModelStatus('正在加载 3D 模型…', name);
   const loader = new GLTFLoader();
   loader.register((parser) => new VRMLoaderPlugin(parser));
   loader.load(
     url,
-    async (gltf) => {
-      URL.revokeObjectURL(url);
+    (gltf) => {
+      release();
+      if (loadId !== modelLoadId) { VRMUtils.deepDispose(gltf.scene); return; }
       const vrm = gltf.userData.vrm;
+      if (!vrm) {
+        VRMUtils.deepDispose(gltf.scene);
+        setModelStatus('模型加载失败', '请选择有效的 .vrm 模型');
+        return;
+      }
       VRMUtils.removeUnnecessaryJoints(gltf.scene);
-      if (currentVrm) scene.remove(currentVrm.scene);
+      VRMUtils.rotateVRM0(vrm);
+      if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
       currentVrm = vrm;
       mixer = null;
       activeAction = null;
       scene.add(vrm.scene);
+      waveState = null;
+      const leftArm = getBone('leftUpperArm');
+      const rightArm = getBone('rightUpperArm');
+      if (leftArm) leftArm.rotation.z = 1.15;
+      if (rightArm) rightArm.rotation.z = -1.15;
+      vrm.update(0);
+      vrm.scene.updateMatrixWorld(true);
+      vrm.scene.traverse((object) => { if (object.isSkinnedMesh) object.skeleton.update(); });
+      avatarBounds = new THREE.Box3().setFromObject(vrm.scene, true);
+      fitAvatar();
       if (vrm.lookAt) vrm.lookAt.target = camera;
       elements.avatarPlaceholder.hidden = true;
       setModelStatus('3D 模型已加载', '可以测试挥手和对话');
-      addMessage('数字人形象已准备好，有什么可以帮您？', false);
+      document.getElementById('reset-view-btn').hidden = false;
+      document.getElementById('enlarge-avatar-btn').hidden = false;
     },
     (progress) => {
+      if (loadId !== modelLoadId) return;
       if (progress.lengthComputable) {
-        setModelStatus(`正在加载 3D 模型 ${Math.round((progress.loaded / progress.total) * 100)}%`, file.name);
+        setModelStatus(`正在加载 3D 模型 ${Math.round((progress.loaded / progress.total) * 100)}%`, name);
       }
     },
     (error) => {
-      URL.revokeObjectURL(url);
+      release();
+      if (loadId !== modelLoadId) return;
       console.error('VRM 加载失败：', error);
       setModelStatus('模型加载失败', '请确认所选文件是有效的 .vrm 模型');
     },
@@ -574,8 +666,8 @@ function updateAvatar(delta) {
   } else {
     const head = getBone('head');
     if (head) {
-      head.rotation.y = Math.sin(now * 0.0006) * 0.06;
-      head.rotation.x = speaking ? Math.sin(now * 0.01) * 0.03 : 0;
+      head.rotation.y = reducedMotion?.matches ? 0 : Math.sin(now * 0.0006) * 0.06;
+      head.rotation.x = speaking && !reducedMotion?.matches ? Math.sin(now * 0.01) * 0.03 : 0;
     }
     updateWave(now);
   }
@@ -612,7 +704,7 @@ function updateWave(now) {
   const progress = (now - waveState.start) / WAVE_DURATION;
   if (progress >= 1) {
     waveState = null;
-    if (upperArm) upperArm.rotation.z = 0;
+    if (upperArm) upperArm.rotation.z = -1.15;
     if (lowerArm) lowerArm.rotation.x = 0;
     if (hand) hand.rotation.x = 0;
     return;
@@ -620,7 +712,7 @@ function updateWave(now) {
 
   const raise = Math.min(1, progress / 0.3);
   const ease = raise * raise * (3 - 2 * raise);
-  if (upperArm) upperArm.rotation.z = -1.35 * ease;
+  if (upperArm) upperArm.rotation.z = -1.15 + 1.7 * ease;
   if (lowerArm) lowerArm.rotation.x = 0.55 * ease;
   if (hand && progress > 0.3) hand.rotation.x = Math.sin(now * 0.02) * 0.4;
 }
