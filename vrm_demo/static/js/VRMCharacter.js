@@ -619,7 +619,7 @@ function createAnimationLoader() {
 }
 
 function filteredSceneAnimation(animation, name, vrm) {
-  if (FULL_EXPRESSION_ACTIONS.has(name)) {
+  if (name === 'preview' || FULL_EXPRESSION_ACTIONS.has(name)) {
     return { ...animation, lookAtTrack:null,
       humanoidTracks: {
         rotation:new Map(animation.humanoidTracks.rotation),
@@ -696,7 +696,7 @@ function playVrmAnimation(animation, loopMode, name = 'preview') {
   activeAction.setLoop(THREE.LoopOnce, 1);
   activeAction.clampWhenFinished = true;
   activeAction.play();
-  scenePlayback = { name, fullExpression:FULL_EXPRESSION_ACTIONS.has(name), elapsed:0, duration:clip.duration, from, bindings,
+  scenePlayback = { name, fullExpression:(name === 'preview' || FULL_EXPRESSION_ACTIONS.has(name)), elapsed:0, duration:clip.duration, from, bindings,
     expressions:[...filtered.expressionTracks.preset.keys(), ...filtered.expressionTracks.custom.keys()],
     bases:modelPose.map(p => ({...p, baseRotation:p.rotation.clone(), basePosition:p.position.clone()})),
   };
