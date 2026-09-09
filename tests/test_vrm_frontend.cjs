@@ -339,9 +339,67 @@ test('full-expression actions keep face tracks; others defer to speech and blink
     model = {expressionManager:{getExpression:n => ['aa','blinkLeft'].includes(n)}};`);
   assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'greet',model).expressionTracks.preset.keys()")),[]);
   assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'greet',model).humanoidTracks.rotation.keys()")),['head']);
-  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'thanks',model).expressionTracks.preset.keys()")),['aa','blinkLeft']);
-  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'thanks',model).humanoidTracks.rotation.keys()")),['head','leftEye','jaw']);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'thanks',model).expressionTracks.preset.keys()")),['blinkLeft']);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'thanks',model).humanoidTracks.rotation.keys()")),['head','leftEye']);
   assert.equal(f.run("filteredSceneAnimation(sample,'greet',model).lookAtTrack"),null);
+});
+
+test('speech timeline keeps controlling articulation during every facial action', () => {
+  for (const action of ['greet','explain','alert','booking','confirm','thanks','wink','preview']) {
+    const f = frontend();
+    const values = avatar(f);
+    f.run(`activeAction={}; scenePlayback={name:'${action}',fullExpression:true,expressions:['blink']};
+      updateSceneAnimation=()=>{};
+      audioContext={currentTime:.1};
+      currentVisemes={startTime:0,timeline:[{start:0,end:.2,viseme:'aa'},{start:.2,end:.4,viseme:'ou'}],lastIndex:-1,smoothOpen:0,
+        samples:new Uint8Array(8),analyser:{getByteTimeDomainData(s){s.fill(170);}}};
+      updateAvatar(.016);`);
+    assert.ok(values.aa > 0, action);
+    f.run('audioContext.currentTime=.25; updateAvatar(.016);');
+    assert.ok(values.ou > 0, action);
+    assert.ok(values.aa > 0, 'brief blend retains previous articulation');
+    f.run('audioContext.currentTime=.5; updateAvatar(.016);');
+    assert.ok(['aa','ih','ou','ee','oh'].every(v=>values[v]===0));
+  }
+});
+
+test('browser fallback speaks during full facial actions and resets on error', async () => {
+  const f=frontend(); const values=avatar(f); let utterance;
+  f.sandbox.window.speechSynthesis={speak(u){utterance=u;u.onstart();}};
+  f.run("activeAction={};scenePlayback={name:'explain',fullExpression:true,expressions:[]};updateSceneAnimation=()=>{};");
+  const result=f.run("speakWithBrowser('测试')");
+  f.run('updateAvatar(.016);');
+  assert.ok(Object.values(values).some(v=>v>0));
+  utterance.onerror();
+  assert.equal(await result,false);
+  assert.ok(['aa','ih','ou','ee','oh'].every(v=>values[v]===0));
+  assert.ok(Object.values(f.run('mouthWeights')).every(v=>v===0));
+});
+
+test('smile mouth overrides are bypassed only during speech and restored on failure', () => {
+  const f=frontend(); avatar(f);
+  f.run(`smile={overrideMouth:'block'};relaxed={overrideMouth:'blend'};
+    currentVrm.expressionManager.expressions=[smile,relaxed];
+    observed=[];currentVrm.update=()=>observed.push([smile.overrideMouth,relaxed.overrideMouth]);
+    browserSpeaking=true;updateVrmWithSpeechPriority(.016);`);
+  assert.deepEqual(Array.from(f.run('observed[0]')),['none','none']);
+  assert.equal(f.run('smile.overrideMouth'),'block');
+  f.run('browserSpeaking=false;updateVrmWithSpeechPriority(.016);');
+  assert.deepEqual(Array.from(f.run('observed[1]')),['block','blend']);
+  f.run("browserSpeaking=true;currentVrm.update=()=>{throw Error('test');};");
+  assert.throws(()=>f.run('updateVrmWithSpeechPriority(.016)'));
+  assert.equal(f.run('relaxed.overrideMouth'),'blend');
+});
+
+test('mouth transitions are independent of frame rate and reset at silence', () => {
+  const a=frontend(),b=frontend();avatar(a);avatar(b);
+  a.run("for(let i=0;i<6;i++)blendSpeechMouth('aa',.7,1/60);");
+  b.run("for(let i=0;i<3;i++)blendSpeechMouth('aa',.7,1/30);");
+  assert.ok(Math.abs(a.run('mouthWeights.aa')-b.run('mouthWeights.aa'))<1e-8);
+  a.run("blendSpeechMouth('ou',.7,1/60);");
+  assert.ok(a.run('mouthWeights.ou>0 && mouthWeights.aa>0'));
+  a.run('blendSpeechMouth(null,0,.016);');
+  assert.ok(Object.values(a.run('mouthWeights')).every(v=>v===0));
 });
 
 test('finished actions release mixer, clear expressions and restore base pose', () => {

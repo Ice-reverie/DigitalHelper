@@ -46,9 +46,8 @@ let greetApplied = [];
 let gazeTarget = null;
 const gazePointer = { x: 0, y: 0, smoothX: 0, smoothY: 0 };
 const ACTION_LABELS = { greet:'问候', explain:'讲解', alert:'预警提醒', booking:'预约引导', confirm:'确认', thanks:'致谢', wink:'轻松互动' };
-// Actions listed here keep their full facial animation (blink / mouth / eyes).
-// While one plays, auto-blink, lip-sync and gaze are paused, then restored.
-// Add an action name here to give it the same treatment.
+// These actions own blink/eye expressions, but speech always owns vowel shapes.
+// Auto-blink and gaze pause during these actions; lip-sync keeps running.
 // Greet owns its reference smile/blink; live speech still owns the mouth.
 const FULL_EXPRESSION_ACTIONS = new Set(['explain', 'alert', 'booking', 'confirm', 'thanks', 'wink']);
 const actionCache = new Map();
@@ -68,6 +67,7 @@ let audioContext = null;
 let speaking = false;
 let browserSpeaking = false;
 const VOWELS = ['aa', 'ih', 'ou', 'ee', 'oh'];
+const mouthWeights = Object.fromEntries(VOWELS.map(name => [name, 0]));
 const WAVE_DURATION = 2600;
 
 let recognition = null;
@@ -460,6 +460,7 @@ function loadVrm(url, name, release = () => {}) {
       if (url.startsWith('/api/avatar')) tuneCompanionFace(vrm);
       if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
       currentVrm = vrm;
+      resetSpeechMouth();
       defaultAvatar = url === '/api/avatar';
       avatarGltf = gltf;
       idleAnimation = null;
@@ -681,12 +682,12 @@ function filteredSceneAnimation(animation, name, vrm) {
   if (name === 'preview' || FULL_EXPRESSION_ACTIONS.has(name)) {
     return { ...animation, lookAtTrack:null,
       humanoidTracks: {
-        rotation:new Map(animation.humanoidTracks.rotation),
-        translation:new Map(animation.humanoidTracks.translation),
+        rotation:new Map([...animation.humanoidTracks.rotation].filter(([bone]) => bone !== 'jaw')),
+        translation:new Map([...animation.humanoidTracks.translation].filter(([bone]) => bone !== 'jaw')),
       },
       expressionTracks: {
-        preset:new Map([...animation.expressionTracks.preset].filter(([key]) => vrm.expressionManager?.getExpression(key))),
-        custom:new Map([...animation.expressionTracks.custom].filter(([key]) => vrm.expressionManager?.getExpression(key))),
+        preset:new Map([...animation.expressionTracks.preset].filter(([key]) => !VOWELS.includes(key) && vrm.expressionManager?.getExpression(key))),
+        custom:new Map([...animation.expressionTracks.custom].filter(([key]) => !VOWELS.includes(key) && vrm.expressionManager?.getExpression(key))),
       },
     };
   }
@@ -694,12 +695,12 @@ function filteredSceneAnimation(animation, name, vrm) {
   return { ...animation, lookAtTrack:null,
     humanoidTracks: {
       rotation:new Map([...animation.humanoidTracks.rotation].filter(([bone]) => !['leftEye','rightEye','jaw'].includes(bone))),
-      translation:new Map(animation.humanoidTracks.translation),
+      translation:new Map([...animation.humanoidTracks.translation].filter(([bone]) => bone !== 'jaw')),
     },
     expressionTracks: {
       preset:new Map([...animation.expressionTracks.preset].filter(([key]) =>
         !VOWELS.includes(key) && (!isBlink(key) || name === 'wink' || (name === 'greet' && key === 'blink')) && vrm.expressionManager?.getExpression(key))),
-      custom:new Map([...animation.expressionTracks.custom].filter(([key]) => vrm.expressionManager?.getExpression(key))),
+      custom:new Map([...animation.expressionTracks.custom].filter(([key]) => !VOWELS.includes(key) && vrm.expressionManager?.getExpression(key))),
     },
   };
 }
@@ -943,7 +944,7 @@ async function playSegments(segments) {
       } finally {
         speaking = false;
         currentVisemes = null;
-        VOWELS.forEach((v) => setExpression(v, 0));
+        resetSpeechMouth();
       }
     }
     // Fall back per sentence: preserve order and never skip missing audio.
@@ -976,7 +977,7 @@ function playAudioWithVisemes(buffer, timeline) {
       source.disconnect();
       analyser.disconnect();
       currentVisemes = null;
-      VOWELS.forEach((v) => setExpression(v, 0));
+      resetSpeechMouth();
       resolve();
     };
     try {
@@ -996,7 +997,7 @@ function speakWithBrowser(text) {
     const finish = (success) => {
       speaking = false;
       browserSpeaking = false;
-      VOWELS.forEach((v) => setExpression(v, 0));
+      resetSpeechMouth();
       resolve(success);
     };
     try {
@@ -1031,6 +1032,39 @@ function setExpression(name, value) {
   }
 }
 
+function resetSpeechMouth() {
+  for (const name of VOWELS) {
+    mouthWeights[name] = 0;
+    setExpression(name, 0);
+  }
+}
+
+function blendSpeechMouth(target, open, delta) {
+  // Close immediately on explicit silence/end; blend articulation over ~60 ms.
+  if (!VOWELS.includes(target) || open < .005) { resetSpeechMouth(); return; }
+  const alpha = 1 - Math.exp(-Math.max(0, delta) / .06);
+  for (const name of VOWELS) {
+    mouthWeights[name] += ((name === target ? open : 0) - mouthWeights[name]) * alpha;
+    setExpression(name, mouthWeights[name]);
+  }
+}
+
+function updateVrmWithSpeechPriority(delta) {
+  const overrides = [];
+  if (currentVisemes || browserSpeaking) {
+    for (const expression of currentVrm.expressionManager?.expressions || []) {
+      if (expression.overrideMouth !== 'none' && expression.overrideMouth != null) {
+        overrides.push([expression, expression.overrideMouth]);
+        expression.overrideMouth = 'none';
+      }
+    }
+  }
+  try { currentVrm.update(delta); }
+  finally {
+    for (const [expression, value] of overrides) expression.overrideMouth = value;
+  }
+}
+
 function updateAvatar(delta) {
   if (!currentVrm) return;
   const now = performance.now();
@@ -1041,7 +1075,7 @@ function updateAvatar(delta) {
   updateGaze(delta);
 
   if (!scenePlayback?.fullExpression && !(scenePlayback?.name === 'greet' && scenePlayback.expressions.includes('blink'))) updateBlink(now);
-  if (!scenePlayback?.fullExpression && currentVisemes && audioContext) {
+  if (currentVisemes && audioContext) {
     const elapsed = audioContext.currentTime - currentVisemes.startTime;
     const timeline = currentVisemes.timeline;
     let index = currentVisemes.lastIndex;
@@ -1059,23 +1093,15 @@ function updateAvatar(delta) {
     }
     const rms = Math.sqrt(sum / currentVisemes.samples.length);
     const open = Math.min(1, rms * 3.5);
-    currentVisemes.smoothOpen += (open - currentVisemes.smoothOpen) * 0.15;
+    currentVisemes.smoothOpen += (open - currentVisemes.smoothOpen) * (1 - Math.exp(-Math.max(0, delta) / .035));
     const value = currentVisemes.smoothOpen;
-    if (target !== currentVisemes.lastTarget || Math.abs(value - currentVisemes.lastOpen) > 0.02) {
-      currentVisemes.lastTarget = target;
-      currentVisemes.lastOpen = value;
-      if (target) {
-        VOWELS.forEach((v) => setExpression(v, v === target ? value : 0));
-      } else {
-        VOWELS.forEach((v) => setExpression(v, 0));
-      }
-    }
-  } else if (!scenePlayback?.fullExpression && browserSpeaking) {
+    blendSpeechMouth(target, value, delta);
+  } else if (browserSpeaking) {
     // Browser speech exposes no PCM: approximate articulation while it speaks.
     const target = VOWELS[Math.floor(now / 130) % VOWELS.length];
     const open = 0.12 + Math.abs(Math.sin(now * 0.012)) * 0.28;
-    VOWELS.forEach((v) => setExpression(v, v === target ? open : 0));
-  }
+    blendSpeechMouth(target, open, delta);
+  } else { resetSpeechMouth(); }
   if (!activeAction) {
     const head = getBone('head');
     if (head && !hasIdle) {
@@ -1085,7 +1111,7 @@ function updateAvatar(delta) {
     updateWave(now);
   }
 
-  currentVrm.update(delta);
+  updateVrmWithSpeechPriority(delta);
 }
 
 let nextBlinkAt = 2000;
