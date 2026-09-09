@@ -40,6 +40,10 @@ let avatarBounds = null;
 let modelLoadId = 0;
 let idleAnimation = null;
 let defaultAvatar = false;
+let avatarLoading = false;
+let currentAvatarName = 'Lumine（默认适配版）';
+let currentAvatarId = 'Lumine_companion';
+let availableAvatars = [];
 let avatarGltf = null;
 const secondaryCache = new Map();
 let greetApplied = [];
@@ -83,6 +87,7 @@ checkService();
 addMessage('您好，我是小安。点一下「开始说话」，告诉我哪里不舒服，或需要什么帮助。我会陪您一步步完成。', false);
 renderQuickReplies();
 if (renderer) loadVrm('/api/avatar', '小安的默认形象');
+loadAvatarCatalog();
 
 function initThree() {
   try {
@@ -181,6 +186,11 @@ function fitAvatar() {
 }
 
 function bindUI() {
+  document.getElementById('switch-avatar-btn').addEventListener('click', () => {
+    const selected = availableAvatars.find(avatar => avatar.id === document.getElementById('avatar-select').value);
+    if (selected) loadVrm(`/api/avatars/${encodeURIComponent(selected.id)}`, selected.label, () => {}, selected);
+    else loadAvatarCatalog();
+  });
   const motionButton = document.getElementById('motion-btn');
   const applyMotion = () => {
     document.documentElement.classList.toggle('motion-reduced', motionReduced);
@@ -415,7 +425,7 @@ function handleAction(actionName) {
   lastSceneAction = name;
   actionRequestId += 1;
   if (!name || motionReduced) return;
-  if (!currentVrm) return;
+  if (!currentVrm || avatarLoading) return;
   playActionByName(name);
 }
 
@@ -429,13 +439,68 @@ function loadVrmFromFile(file) {
   loadVrm(url, file.name, () => URL.revokeObjectURL(url));
 }
 
-function loadVrm(url, name, release = () => {}) {
+async function loadAvatarCatalog() {
+  const select = document.getElementById('avatar-select');
+  const button = document.getElementById('switch-avatar-btn');
+  const status = document.getElementById('avatar-catalog-status');
+  try {
+    const response = await fetch('/api/avatars');
+    if (!response.ok) throw new Error('Avatar catalog unavailable');
+    const data = await response.json();
+    if (!Array.isArray(data) || !data.length || data.some(v => !/^[A-Za-z0-9_]+$/.test(v.id) || typeof v.label !== 'string' || !['lumine','standard'].includes(v.profile))) throw new Error('Invalid avatar catalog');
+    availableAvatars = data;
+    select.replaceChildren();
+    for (const avatar of data) {
+      const option = document.createElement('option');
+      option.value = avatar.id;
+      option.textContent = avatar.label;
+      select.appendChild(option);
+    }
+    select.value = currentAvatarId;
+    select.disabled = false;
+    button.disabled = false;
+    button.textContent = '切换形象';
+    status.textContent = `可选择 ${data.length} 个形象，切换后自动恢复全身视角。`;
+  } catch {
+    button.disabled = false;
+    button.textContent = '重试人物列表';
+    status.textContent = '人物列表暂不可用，当前形象仍可使用，也可以载入本地文件。';
+  }
+}
+
+async function adaptAvatar(vrm, gltf, profile) {
+  if (profile !== 'lumine') return;
+  tuneCompanionFace(vrm);
+  // Original Lumine has morphs but no VRM expression bindings. Bind its face
+  // primitives using their actual source mesh, without altering the VRM file.
+  const faces = [];
+  for (const [index, node] of gltf.parser.json.nodes.entries()) {
+    if (node.mesh !== 1) continue;
+    const object = await gltf.parser.getDependency('node', index);
+    object.traverse(mesh => { if (mesh.morphTargetInfluences?.length >= 43) faces.push(mesh); });
+  }
+  const bindings = {blink:[[0,1],[1,1]],blinkLeft:[[0,1]],blinkRight:[[1,1]],
+    aa:[[18,1]],ih:[[19,1]],ou:[[20,1]],ee:[[22,1]],oh:[[21,1]],happy:[[32,.5],[37,.2]]};
+  for (const [name, shapes] of Object.entries(bindings)) {
+    if (vrm.expressionManager.getExpression(name)?.binds.length || !faces.length) continue;
+    const previous = vrm.expressionManager.getExpression(name);
+    if (previous) { vrm.expressionManager.unregisterExpression(previous); previous.removeFromParent(); }
+    const expression = new VRMExpression(name);
+    for (const [index, weight] of shapes) expression.addBind(new VRMExpressionMorphTargetBind({primitives:faces,index,weight}));
+    vrm.expressionManager.registerExpression(expression);
+    vrm.scene.add(expression);
+  }
+}
+
+function loadVrm(url, name, release = () => {}, avatar = null) {
   if (!renderer) {
     release();
     setModelStatus('无法加载 3D 模型', '当前设备未启用 WebGL，其他功能仍可使用');
     return;
   }
   const loadId = ++modelLoadId;
+  avatarLoading = true;
+  const profile = avatar?.profile || (url === '/api/avatar' ? 'lumine' : 'standard');
   secondaryCache.clear();
   lastVariant.clear();
   actionRequestId += 1;
@@ -446,53 +511,71 @@ function loadVrm(url, name, release = () => {}) {
   loader.register((parser) => new VRMLoaderPlugin(parser));
   loader.load(
     url,
-    (gltf) => {
+    async (gltf) => {
       release();
       if (loadId !== modelLoadId) { VRMUtils.deepDispose(gltf.scene); return; }
       const vrm = gltf.userData.vrm;
       if (!vrm) {
+        avatarLoading = false;
         VRMUtils.deepDispose(gltf.scene);
         setModelStatus('模型加载失败', '请选择有效的 .vrm 模型');
         return;
       }
+      try {
       VRMUtils.removeUnnecessaryJoints(gltf.scene);
       VRMUtils.rotateVRM0(vrm);
-      if (url.startsWith('/api/avatar')) tuneCompanionFace(vrm);
-      if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
-      currentVrm = vrm;
-      resetSpeechMouth();
-      defaultAvatar = url === '/api/avatar';
-      avatarGltf = gltf;
-      idleAnimation = null;
-      mixer = null;
-      activeAction = null;
-      scene.add(vrm.scene);
-      waveState = null;
-      const leftArm = getBone('leftUpperArm');
-      const rightArm = getBone('rightUpperArm');
+      await adaptAvatar(vrm, gltf, profile);
+      if (loadId !== modelLoadId) { VRMUtils.deepDispose(gltf.scene); return; }
+      const leftArm = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
+      const rightArm = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
       if (leftArm) leftArm.rotation.z = 1.15;
       if (rightArm) rightArm.rotation.z = -1.15;
-      modelPose = Object.keys(vrm.humanoid.normalizedHumanBones).map((name) => {
+      const preparedPose = Object.keys(vrm.humanoid.normalizedHumanBones).map((name) => {
         const node = vrm.humanoid.getNormalizedBoneNode(name);
         return { name, node, rotation:node.quaternion.clone(), position:node.position.clone() };
       });
       vrm.update(0);
       vrm.scene.updateMatrixWorld(true);
       vrm.scene.traverse((object) => { if (object.isSkinnedMesh) object.skeleton.update(); });
-      avatarBounds = new THREE.Box3().setFromObject(vrm.scene, true);
+      const preparedBounds = new THREE.Box3().setFromObject(vrm.scene, true);
+      stopSceneAnimation();
+      if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
+      currentVrm = vrm;
+      currentAvatarName = name;
+      currentAvatarId = avatar?.id || (url === '/api/avatar' ? 'Lumine_companion' : '');
+      document.getElementById('avatar-select').value = currentAvatarId;
+      avatarLoading = false;
+      resetSpeechMouth();
+      defaultAvatar = profile === 'lumine';
+      avatarGltf = gltf;
+      idleAnimation = null;
+      mixer = null;
+      activeAction = null;
+      scene.add(vrm.scene);
+      waveState = null;
+      modelPose = preparedPose;
+      avatarBounds = preparedBounds;
       fitAvatar();
       if (vrm.lookAt) vrm.lookAt.target = gazeTarget;
       nextBlinkAt = performance.now() + 2200;
       blinking = false;
-      if (url.startsWith('/api/avatar')) loadDefaultIdle(gltf, vrm, loadId);
+      loadDefaultIdle(gltf, vrm, loadId, defaultAvatar);
       getAnimationCatalog().then(catalog => {
         for (const [name, variants] of Object.entries(catalog)) {
           for (const variant of variants) getSceneAnimation(name, variant.id).catch(() => {});
         }
       }).catch(() => {});
       elements.avatarPlaceholder.hidden = true;
-      setModelStatus('3D 模型已加载', '可以测试挥手和对话');
+      setModelStatus(`${name} 已加载`, '全身视角、语音口型和标准骨骼动作已就绪');
       document.getElementById('reset-view-btn').hidden = false;
+      } catch (error) {
+        if (currentVrm !== vrm) VRMUtils.deepDispose(gltf.scene);
+        if (loadId !== modelLoadId) return;
+        avatarLoading = false;
+        document.getElementById('avatar-select').value = currentAvatarId;
+        setModelStatus('形象适配失败', '请重新选择形象或载入有效的 VRM 文件');
+        console.error('形象适配失败', error);
+      }
     },
     (progress) => {
       if (loadId !== modelLoadId) return;
@@ -503,6 +586,8 @@ function loadVrm(url, name, release = () => {}) {
     (error) => {
       release();
       if (loadId !== modelLoadId) return;
+      avatarLoading = false;
+      document.getElementById('avatar-select').value = currentAvatarId;
       console.error('VRM 加载失败：', error);
       setModelStatus('模型加载失败', '请确认所选文件是有效的 .vrm 模型');
     },
@@ -545,20 +630,20 @@ function idleSample(time, duration, fps) {
   return { index: Math.floor(frame), fraction: frame - Math.floor(frame) };
 }
 
-async function loadDefaultIdle(gltf, vrm, loadId) {
+async function loadDefaultIdle(gltf, vrm, loadId, includeSecondary = defaultAvatar) {
   try {
     const response = await fetch('/api/animations/idle');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (data.version !== 1 || !Number.isFinite(data.duration) || data.duration <= 0 || !Number.isFinite(data.fps) || data.fps <= 0) throw new Error('Invalid idle format');
-    const tracks = await Promise.all(data.tracks.map(async (track) => {
+    const tracks = await Promise.all(data.tracks.filter(track => track.bone || includeSecondary).map(async (track) => {
       const node = track.bone ? vrm.humanoid.getNormalizedBoneNode(track.bone) : await gltf.parser.getDependency('node', track.node);
       if (!node || track.values.length !== (Math.round(data.duration * data.fps) + 1) * 4 || !track.values.every(Number.isFinite)) throw new Error('Invalid idle track');
       return { ...track, target:node, rest:node.quaternion.clone(), current:new THREE.Quaternion(), next:new THREE.Quaternion() };
     }));
     if (loadId !== modelLoadId || vrm !== currentVrm) return;
     idleAnimation = { ...data, tracks, time:0 };
-    setModelStatus('自然待机已就绪', '头发与衣服轻摆，自动眨眼；眼睛跟随鼠标或触摸位置');
+    setModelStatus(`${currentAvatarName} 已就绪`, includeSecondary ? '自然待机、头发衣服轻摆、口型、眨眼和视线跟随已适配' : '自然待机、口型、眨眼和视线跟随已适配；保留人物自带物理摆动');
   } catch (error) {
     if (loadId !== modelLoadId) return;
     console.warn('默认待机加载失败', error);

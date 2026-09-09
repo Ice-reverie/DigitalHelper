@@ -53,6 +53,27 @@ async def default_avatar():
     return FileResponse(path, media_type="model/gltf-binary")
 
 
+AVATAR_NAMES = ("Lumine_companion", "Lumine", "Anaxa", "Ashveil", "Klee", "Lohen", "Odette", "Ratio")
+
+
+@app.get("/api/avatars")
+async def avatar_catalog():
+    return [{"id": name, "label": "Lumine（默认适配版）" if name == "Lumine_companion" else name,
+             "profile": "lumine" if name.startswith("Lumine") else "standard"}
+            for name in AVATAR_NAMES
+            if os.path.isfile(os.path.join(BASE_DIR, "..", "models", "characters", name + ".vrm"))]
+
+
+@app.get("/api/avatars/{name}")
+async def named_avatar(name: str):
+    if name not in AVATAR_NAMES:
+        raise HTTPException(status_code=404, detail="Unknown avatar")
+    path = os.path.join(BASE_DIR, "..", "models", "characters", name + ".vrm")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Avatar file not found")
+    return FileResponse(path, media_type="model/gltf-binary")
+
+
 @app.get("/api/animations/idle")
 async def default_idle():
     path = os.path.join(BASE_DIR, "..", "models", "animations", "Lumine_idle.json")

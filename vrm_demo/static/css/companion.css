@@ -198,3 +198,8 @@ html.motion-reduced *, html.motion-reduced *::before, html.motion-reduced *::aft
   .conversation-overlay .msg { font-size:.9rem; padding:14px; }
   .avatar-actions { left:12px; gap:4px; }
 }
+.avatar-picker { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; margin:18px 0; }
+.avatar-picker label,.avatar-picker p { grid-column:1 / -1; }
+.avatar-picker select { min-width:0; min-height:48px; padding:10px 12px; border:1px solid #b9b0ce; border-radius:12px; background:#fff; color:#34294b; font:inherit; }
+.avatar-picker select:focus-visible { outline:3px solid #776292; outline-offset:2px; }
+.avatar-picker p { margin:0; font-size:.9rem; }

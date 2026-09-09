@@ -231,6 +231,77 @@ test('each scene reply triggers a variant and honors reduced motion', () => {
   assert.equal(f.run('calls.length'), 4);
 });
 
+test('avatar settings fetch catalog and switch the selected model', async () => {
+  const f=frontend();
+  // Let the startup catalog fail before supplying the successful retry.
+  await Promise.resolve(); await Promise.resolve();
+  f.sandbox.fetch=async()=>({ok:true,json:async()=>[
+    {id:'Lumine_companion',label:'默认',profile:'lumine'},
+    {id:'Klee',label:'Klee',profile:'standard'}]});
+  await f.run('loadAvatarCatalog()');
+  assert.equal(f.elements.get('avatar-select').children.length,2);
+  f.elements.get('avatar-select').value='Klee';
+  f.run('loadVrm=(...args)=>switched=args');
+  f.elements.get('switch-avatar-btn').handlers.click();
+  assert.equal(f.run('switched[0]'),'/api/avatars/Klee');
+  assert.equal(f.run('switched[3].profile'),'standard');
+});
+
+test('standard characters receive humanoid idle without Lumine raw bone tracks', async () => {
+  const f=frontend();
+  await Promise.resolve(); await Promise.resolve();
+  f.sandbox.idleData=JSON.parse(fs.readFileSync(path.join(__dirname,'../models/animations/Lumine_idle.json')));
+  f.run(`THREE.Quaternion=class {clone(){return this}};
+    currentVrm={humanoid:{getNormalizedBoneNode(){return {quaternion:new THREE.Quaternion()}}}};
+    modelLoadId=4;fetch=async()=>({ok:true,json:async()=>idleData});
+    parser={getDependency(){throw Error('Must not bind Lumine raw bones')}};`);
+  await f.run('loadDefaultIdle({parser},currentVrm,4,false)');
+  assert.equal(f.run('idleAnimation.tracks.length'),16);
+  assert.equal(f.run('idleAnimation.tracks.every(t=>!!t.bone)'),true);
+});
+
+test('original Lumine gets mouth and blink bindings once without overwriting existing presets', async () => {
+  const f=frontend();
+  f.run(`THREE.Quaternion=class {};
+    VRMExpression=class {constructor(name){this.expressionName=name;this.binds=[]} addBind(b){this.binds.push(b)}};
+    VRMExpressionMorphTargetBind=class {constructor(options){Object.assign(this,options)}};
+    expressions={};face={morphTargetInfluences:Array(43).fill(0)};
+    localVrm={scene:{traverse(){},add(){}},expressionManager:{getExpression(n){return expressions[n]},registerExpression(e){expressions[e.expressionName]=e}}};
+    localGltf={parser:{json:{nodes:[{mesh:1}]},async getDependency(){return {traverse(fn){fn(face)}}}}};`);
+  await f.run("adaptAvatar(localVrm,localGltf,'lumine')");
+  assert.equal(f.run('expressions.aa.binds[0].index'),18);
+  assert.equal(f.run('expressions.ee.binds[0].index'),22);
+  assert.equal(f.run('expressions.blink.binds.length'),2);
+  const first=f.run('expressions.aa');
+  await f.run("adaptAvatar(localVrm,localGltf,'lumine')");
+  assert.equal(f.run('expressions.aa'),first);
+});
+
+test('scene replies do not attach actions to the old avatar during switching', () => {
+  const f=frontend();
+  f.run("currentVrm={};avatarLoading=true;calls=0;playActionByName=()=>calls++;handleAction('greet');");
+  assert.equal(f.run('calls'),0);
+  f.run("avatarLoading=false;handleAction('greet');");
+  assert.equal(f.run('calls'),1);
+});
+
+test('outdated avatar downloads are disposed and failed selection keeps the previous model', async () => {
+  const f=frontend();
+  f.run(`renderer={};currentVrm={id:'previous'};currentAvatarId='Klee';downloads=[];disposed=[];
+    stopSceneAnimation=()=>{};VRMLoaderPlugin=class {};
+    VRMUtils={deepDispose(s){disposed.push(s)}};
+    GLTFLoader=class {register(){} load(...args){downloads.push(args)}};
+    loadVrm('/api/avatars/Anaxa','Anaxa',()=>{},{profile:'standard',id:'Anaxa'});
+    loadVrm('/api/avatars/Ratio','Ratio',()=>{},{profile:'standard',id:'Ratio'});`);
+  await f.run("downloads[0][1]({scene:'old-download'})");
+  assert.deepEqual(Array.from(f.run('disposed')),['old-download']);
+  assert.equal(f.run('currentVrm.id'),'previous');
+  f.run("downloads[1][3](Error('missing'))");
+  assert.equal(f.run('currentVrm.id'),'previous');
+  assert.equal(f.run('avatarLoading'),false);
+  assert.equal(f.elements.get('avatar-select').value,'Klee');
+});
+
 test('random variants exclude the last played version and support a single asset', () => {
   const f = frontend();
   f.run("variants = [1,2,3].map(n => ({id:'explain_'+n})); Math.random = () => 0;");
