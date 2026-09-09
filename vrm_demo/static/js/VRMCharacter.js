@@ -68,10 +68,14 @@ let mixer = null;
 let activeAction = null;
 let waveState = null;
 let conversationContext = {};
+let conversationHistory = [];
+const MAX_HISTORY = 10;
 
 let audioContext = null;
 let speaking = false;
 let browserSpeaking = false;
+let speechSourceRef = null;
+let playbackStopped = false;
 const VOWELS = ['aa', 'ih', 'ou', 'ee', 'oh'];
 const mouthWeights = Object.fromEntries(VOWELS.map(name => [name, 0]));
 const WAVE_DURATION = 2600;
@@ -292,7 +296,10 @@ function initSpeechRecognition() {
     }
     elements.textInput.value = transcript.trim();
     setInteractionStatus(hasFinalResult ? '已经听清，正在处理。' : `正在聆听：${transcript}`, 'listening');
-    if (hasFinalResult && transcript.trim()) sendMessage(transcript.trim());
+    if (hasFinalResult && transcript.trim()) {
+      stopCurrentSpeech();
+      sendMessage(transcript.trim());
+    }
   };
   recognition.onerror = (event) => {
     const messages = {
@@ -309,7 +316,10 @@ function toggleListening() {
   if (!recognition) return;
   try {
     if (listening) recognition.stop();
-    else recognition.start();
+    else {
+      stopCurrentSpeech();
+      recognition.start();
+    }
   } catch (error) {
     setInteractionStatus('语音功能正在准备，请稍后再试。', 'warning');
   }
@@ -377,6 +387,11 @@ async function sendMessage(providedText = '', startNewService = false) {
   const text = (providedText || elements.textInput.value).trim();
   if (!text || elements.sendButton.disabled) return;
 
+  stopCurrentSpeech();
+
+  conversationHistory.push({ role: 'user', content: text });
+  if (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
+
   addMessage(text, true);
   elements.textInput.value = '';
   elements.sendButton.disabled = true;
@@ -390,19 +405,22 @@ async function sendMessage(providedText = '', startNewService = false) {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, context: startNewService ? {} : conversationContext }),
+      body: JSON.stringify({ text, context: startNewService ? {} : conversationContext, history: conversationHistory }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
     conversationContext = data.context || {};
+    const replyText = data.reply || '';
+    conversationHistory.push({ role: 'assistant', content: replyText });
+    if (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
     const note = data.tts_available ? '' : '当前使用浏览器语音播报';
-    addMessage(data.reply, false, note);
+    addMessage(replyText, false, note);
     renderQuickReplies(data.quick_replies || []);
     handleAction(data.action);
 
     setInteractionStatus('正在为您朗读，请稍候……');
-    const playback = await playSegments(data.segments?.length ? data.segments : [{ text: data.reply }]);
+    const playback = await playSegments(data.segments?.length ? data.segments : [{ text: replyText }]);
     setInteractionStatus(
       playback.failed ? '部分语音暂时无法播放，请查看下方文字回复。'
         : data.context?.flow ? '请按下方提示，选择下一步。' : '已为您回复，还需要什么帮助？',
@@ -410,6 +428,7 @@ async function sendMessage(providedText = '', startNewService = false) {
     );
   } catch (error) {
     console.error('请求失败：', error);
+    if (conversationHistory.length && conversationHistory[conversationHistory.length - 1].role === 'user') conversationHistory.pop();
     addMessage('抱歉，服务暂时没有响应。请确认后端已经启动，再试一次。', false);
     renderQuickReplies(['重新尝试']);
     setInteractionStatus('服务连接失败，文字内容未提交。', 'warning');
@@ -1083,6 +1102,21 @@ async function initAudioContext() {
   if (audioContext?.state === 'suspended') await audioContext.resume();
 }
 
+function stopCurrentSpeech() {
+  playbackStopped = true;
+  if (speechSourceRef) {
+    try { speechSourceRef.stop(); } catch {}
+    speechSourceRef = null;
+  }
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+  speaking = false;
+  browserSpeaking = false;
+  currentVisemes = null;
+  resetSpeechMouth();
+}
+
 function base64ToArrayBuffer(base64) {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -1100,6 +1134,8 @@ function base64ToBlob(base64, type) {
 async function playSegments(segments) {
   const result = { played: 0, failed: 0 };
   for (const segment of segments) {
+    if (playbackStopped) break;
+
     let played = false;
     if (segment.audio) {
       try {
@@ -1112,13 +1148,18 @@ async function playSegments(segments) {
       } catch (error) {
         console.error('音频播放失败，尝试浏览器播报：', error);
       } finally {
-        speaking = false;
-        currentVisemes = null;
-        resetSpeechMouth();
+        if (!playbackStopped) {
+          speaking = false;
+          currentVisemes = null;
+          resetSpeechMouth();
+        }
       }
     }
-    // Fall back per sentence: preserve order and never skip missing audio.
+    if (playbackStopped) break;
+
     if (!played && segment.text) played = await speakWithBrowser(segment.text);
+    if (playbackStopped) break;
+
     if (played) result.played += 1;
     else result.failed += 1;
   }
@@ -1143,9 +1184,11 @@ function playAudioWithVisemes(buffer, timeline) {
       analyser,
       samples: new Uint8Array(analyser.frequencyBinCount),
     };
+    speechSourceRef = source;
     source.onended = () => {
       source.disconnect();
       analyser.disconnect();
+      if (speechSourceRef === source) speechSourceRef = null;
       currentVisemes = null;
       resetSpeechMouth();
       resolve();
@@ -1155,6 +1198,7 @@ function playAudioWithVisemes(buffer, timeline) {
     } catch (error) {
       source.disconnect();
       analyser.disconnect();
+      if (speechSourceRef === source) speechSourceRef = null;
       currentVisemes = null;
       reject(error);
     }
@@ -1165,6 +1209,7 @@ function speakWithBrowser(text) {
   return new Promise((resolve) => {
     if (!('speechSynthesis' in window)) { resolve(false); return; }
     const finish = (success) => {
+      if (playbackStopped) { resolve(false); return; }
       speaking = false;
       browserSpeaking = false;
       resetSpeechMouth();

@@ -75,16 +75,18 @@ def rule_owned(text, context, fallback):
     )
 
 
-async def request_completion(config, text):
+async def request_completion(config, text, history=None):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history[-10:])
+    messages.append({"role": "user", "content": text})
     async with httpx.AsyncClient(timeout=MODEL_TIMEOUT, follow_redirects=False) as client:
         async with client.stream(
             "POST", config["base"] + "/chat/completions",
             headers={"Authorization": "Bearer " + config["key"]},
-            json={"model": config["model"], "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ], "stream": False, "max_tokens": 500,
-                "response_format": {"type": "json_object"}},
+            json={"model": config["model"], "messages": messages,
+                  "stream": False, "max_tokens": 500,
+                  "response_format": {"type": "json_object"}},
         ) as response:
             response.raise_for_status()
             body = bytearray()
@@ -118,12 +120,12 @@ def validated_reply(payload, fallback):
     return {**fallback, "reply": reply.strip(), "action": "explain" if sources else payload["action"]}
 
 
-async def reply_with_model(text, context, fallback):
+async def reply_with_model(text, context, fallback, history=None):
     config = configuration()
     if config is None or rule_owned(text, context, fallback):
         return fallback
     try:
-        payload = await asyncio.wait_for(request_completion(config, text), MODEL_TIMEOUT)
+        payload = await asyncio.wait_for(request_completion(config, text, history), MODEL_TIMEOUT)
         return validated_reply(payload, fallback) or fallback
     except Exception:
         # Never log upstream exceptions: they can contain credentials, URLs or user text.
