@@ -383,33 +383,53 @@ async def health():
     return {"status": "ok", "tts_available": edge_tts is not None}
 
 
+@app.on_event("startup")
+async def _warmup_tts():
+    if edge_tts is not None:
+        try:
+            await asyncio.wait_for(tts_to_mp3("您好"), timeout=20)
+            print("[warmup] edge_tts ready", flush=True)
+        except Exception as error:
+            print("[warmup] edge_tts failed:", error, flush=True)
+
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     result = build_reply(req.text, req.context)
-    semaphore = asyncio.Semaphore(SEGMENT_CONCURRENCY)
+    sentences = split_sentence(result["reply"])
 
-    async def make_segment(sentence):
-        async with semaphore:
-            audio = b""
-            try:
-                audio = await asyncio.wait_for(tts_to_mp3(sentence), timeout=TTS_TIMEOUT_SECONDS)
-            except Exception as error:
-                print("tts error:", error)
-            audio_base64 = base64.b64encode(audio).decode("utf-8") if audio else ""
-            viseme_timeline = []
-            if audio:
+    # edge_tts cannot run in parallel (WebSocket contention), so synthesize
+    # sequentially but kick off Rhubarb analysis in a worker thread so the
+    # next sentence's TTS overlaps the previous sentence's analysis.
+    segments = [None] * len(sentences)
+    analyze_task = None
+    for i, sentence in enumerate(sentences):
+        if analyze_task:
+            await analyze_task
+            analyze_task = None
+        audio = b""
+        try:
+            audio = await asyncio.wait_for(tts_to_mp3(sentence), timeout=TTS_TIMEOUT_SECONDS)
+        except Exception as error:
+            print("tts error:", error)
+        audio_base64 = base64.b64encode(audio).decode("utf-8") if audio else ""
+        seg = {
+            "text": sentence,
+            "audio": audio_base64,
+            "visemes": text_to_visemes(sentence),
+            "visemeTimeline": [],
+        }
+        segments[i] = seg
+        if audio:
+            async def _analyze(s=seg, a=audio):
                 try:
-                    viseme_timeline = await run_in_threadpool(analyze_audio, audio)
+                    s["visemeTimeline"] = await run_in_threadpool(analyze_audio, a)
                 except Exception as error:
                     print("lipsync error:", error)
-            return {
-                "text": sentence,
-                "audio": audio_base64,
-                "visemes": text_to_visemes(sentence),
-                "visemeTimeline": viseme_timeline,
-            }
-    # gather preserves sentence order even when synthesis finishes out of order.
-    segments = await asyncio.gather(*(make_segment(sentence) for sentence in split_sentence(result["reply"])))
+            analyze_task = asyncio.create_task(_analyze())
+    if analyze_task:
+        await analyze_task
     return {
         **result,
         "segments": segments,

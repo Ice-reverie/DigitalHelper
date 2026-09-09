@@ -28,7 +28,7 @@ const elements = {
 const serviceButtons = [...document.querySelectorAll('[data-service]')];
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 
-let motionReduced = Boolean(reducedMotion?.matches);
+let motionReduced = false;
 const recentMessages = new Map();
 let renderer;
 let scene;
@@ -45,7 +45,7 @@ const ACTION_LABELS = { greet:'问候', explain:'讲解', alert:'预警提醒', 
 // Actions listed here keep their full facial animation (blink / mouth / eyes).
 // While one plays, auto-blink, lip-sync and gaze are paused, then restored.
 // Add an action name here to give it the same treatment.
-const FULL_EXPRESSION_ACTIONS = new Set(['thanks']);
+const FULL_EXPRESSION_ACTIONS = new Set(['greet', 'explain', 'alert', 'booking', 'confirm', 'thanks', 'wink']);
 const actionCache = new Map();
 let actionRequestId = 0;
 let lastSceneAction = null;
@@ -404,7 +404,7 @@ async function sendMessage(providedText = '', startNewService = false) {
 
 function handleAction(actionName) {
   const name = Object.hasOwn(ACTION_LABELS, actionName) ? actionName : null;
-  if (name === lastSceneAction) return;
+
   lastSceneAction = name;
   actionRequestId += 1;
   if (!name || motionReduced) return;
