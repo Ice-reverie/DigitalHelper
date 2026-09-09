@@ -285,6 +285,61 @@ test('scene replies do not attach actions to the old avatar during switching', (
   assert.equal(f.run('calls'),1);
 });
 
+test('idle finger offsets stay bounded, do not accumulate and freeze to a relaxed pose', () => {
+  const f=frontend();
+  f.run(`class FingerQ { constructor(v=0){this.v=v} copy(q){this.v=q.v;return this} multiply(q){this.v+=q.v;return this} setFromAxisAngle(a,v){this.v=v;return this} }
+    finger={quaternion:new FingerQ()};
+    idleHands=[{node:finger,rest:new FingerQ(.2),axis:{},angle:.15,amplitude:.015,phase:.4,speed:.8,offset:new FingerQ()}];
+    valuesSeen=[];
+    for(let i=0;i<1800;i++){updateIdleHands(1/60);valuesSeen.push(finger.quaternion.v);}`);
+  const values=Array.from(f.run('valuesSeen'));
+  assert.ok(Math.min(...values)>=.335-1e-9 && Math.max(...values)<=.365+1e-9);
+  f.run('motionReduced=true;frozenTime=handIdleTime;updateIdleHands(1);');
+  assert.ok(Math.abs(f.run('finger.quaternion.v')-.35)<1e-9);
+  assert.equal(f.run('handIdleTime'),f.run('frozenTime'));
+  f.run('idleHands=[];updateIdleHands(.016);');
+});
+
+test('reference hand loop is bounded and has continuous position and velocity at every key', () => {
+  const f=frontend(), sample=t=>f.run(`sampleHandIdle(${t})`);
+  const period=f.run('HAND_IDLE_CYCLE'), count=f.run('HAND_IDLE_KEYS.length'), epsilon=1e-5;
+  for(let i=0;i<=count;i++) {
+    const t=i*period/count, at=sample(t);
+    assert.ok(Math.abs(sample(t+period)-at)<1e-10);
+    const before=(at-sample(t-epsilon))/epsilon, after=(sample(t+epsilon)-at)/epsilon;
+    assert.ok(Math.abs(before-after)<.003, `velocity jump at key ${i}`);
+  }
+  for(let i=0;i<2000;i++) assert.ok(Math.abs(sample(i*period/2000))<=1+1e-10);
+});
+
+test('wrist motion preserves body idle and stays bounded over repeated frames', () => {
+  const f=frontend();
+  f.run(`class WristQ {constructor(v=0){this.v=v} multiply(q){this.v+=q.v;return this} setFromAxisAngle(a,v){this.v=v;return this}}
+    wrist={quaternion:new WristQ()};
+    idleHands=[{node:wrist,wrist:true,axis:{},swayAxis:{},angle:.05,amplitude:.03,phase:0,sway:.014,offset:new WristQ(),lateral:new WristQ()}];
+    wristValues=[];
+    for(let i=0;i<1800;i++){wrist.quaternion.v=.2;updateIdleHands(1/60);wristValues.push(wrist.quaternion.v);}`);
+  assert.ok(Array.from(f.run('wristValues')).every(v=>v>=.206-1e-9 && v<=.294+1e-9));
+  f.run('motionReduced=true;wrist.quaternion.v=.2;updateIdleHands(1);');
+  assert.ok(Math.abs(f.run('wrist.quaternion.v')-.25)<1e-10);
+});
+
+test('scene animation samples overwrite idle fingers while its exit blends to relaxed fingers', () => {
+  const f=frontend();
+  f.run(`class Q {constructor(v=0){this.v=v}copy(q){this.v=q.v;return this} slerp(q,t){this.v+=(q.v-this.v)*t;return this}}
+    fingerNode={quaternion:new Q(),position:{copy(){return this},lerp(){return this}}};
+    currentVrm={expressionManager:{getValue(){return 0}}};
+    mixer={update(){}};activeAction={};
+    scenePlayback={elapsed:1,duration:3,name:'greet',expressions:[],secondary:[],
+      bindings:[{target:fingerNode,proxy:{quaternion:new Q(.8)},property:'quaternion'}],
+      bases:[{name:'leftIndexProximal',node:fingerNode,baseRotation:new Q(),basePosition:{copy(){}}}],
+      from:new Map([['leftIndexProximal',{rotation:new Q(.15),position:{}}]])};
+    fingerNode.quaternion.v=.15;updateSceneAnimation(.016);`);
+  assert.equal(f.run('fingerNode.quaternion.v'),.8);
+  f.run('scenePlayback.elapsed=2.85;fingerNode.quaternion.v=.15;updateSceneAnimation(0);');
+  assert.ok(Math.abs(f.run('fingerNode.quaternion.v')-.475)<1e-8);
+});
+
 test('outdated avatar downloads are disposed and failed selection keeps the previous model', async () => {
   const f=frontend();
   f.run(`renderer={};currentVrm={id:'previous'};currentAvatarId='Klee';downloads=[];disposed=[];

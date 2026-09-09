@@ -62,6 +62,8 @@ let lastSceneAction = null;
 let scenePlayback = null;
 let animationRig = null;
 let modelPose = [];
+let idleHands = [];
+let handIdleTime = 0;
 let mixer = null;
 let activeAction = null;
 let waveState = null;
@@ -538,6 +540,7 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       vrm.scene.updateMatrixWorld(true);
       vrm.scene.traverse((object) => { if (object.isSkinnedMesh) object.skeleton.update(); });
       const preparedBounds = new THREE.Box3().setFromObject(vrm.scene, true);
+      const preparedHands = prepareIdleHands(vrm);
       stopSceneAnimation();
       if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
       currentVrm = vrm;
@@ -554,6 +557,8 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       scene.add(vrm.scene);
       waveState = null;
       modelPose = preparedPose;
+      idleHands = preparedHands;
+      handIdleTime = 0;
       avatarBounds = preparedBounds;
       fitAvatar();
       if (vrm.lookAt) vrm.lookAt.target = gazeTarget;
@@ -663,6 +668,85 @@ function updateIdle(delta) {
     else track.target.quaternion.copy(track.rest).multiply(track.current);
   }
   return true;
+}
+
+// Hand-authored from 52 paired hand crops (30 fps, every fifth frame).
+// One ~2.9 s cycle: soften/extend, settle, then return. These are visual
+// estimates, not reconstructed 3D joint measurements. Periodic cubic sampling
+// preserves velocity across keys and the loop seam.
+const HAND_IDLE_CYCLE = 2.9;
+const HAND_IDLE_KEYS = [1,.94,.78,.53,.24,-.09,-.43,-.72,-.93,-1,-.93,-.75,-.49,-.16,.2,.54,.81,.94];
+function sampleHandIdle(time) {
+  const position = ((time % HAND_IDLE_CYCLE + HAND_IDLE_CYCLE) % HAND_IDLE_CYCLE) / HAND_IDLE_CYCLE * HAND_IDLE_KEYS.length;
+  const i = Math.floor(position), t = position-i;
+  const key = n => HAND_IDLE_KEYS[(n+HAND_IDLE_KEYS.length)%HAND_IDLE_KEYS.length];
+  const a=key(i-1), b=key(i), c=key(i+1), d=key(i+2);
+  return .5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t*t+(-a+3*b-3*c+d)*t*t*t);
+}
+
+function prepareIdleHands(vrm) {
+  const tracks = [];
+  const bone = name => vrm.humanoid.getNormalizedBoneNode(name);
+  const world = node => node.getWorldPosition(new THREE.Vector3());
+  for (const [side, sign, phase] of [['left',1,0],['right',-1,.12]]) {
+    const wrist = bone(side+'Hand');
+    const index = bone(side+'IndexProximal');
+    const little = bone(side+'LittleProximal');
+    if (!wrist || !index || !little) continue;
+    // Derive the palm-facing direction from this character's own hand geometry,
+    // rather than assuming a local rotation axis shared by all exported rigs.
+    const origin = world(wrist);
+    // Index × little points toward the back of the left palm; reverse that
+    // normal (and mirror for the right hand) to curl toward the palm.
+    const normal = world(index).sub(origin).cross(world(little).sub(origin)).multiplyScalar(-sign);
+    if (normal.lengthSq() < 1e-12) continue;
+    normal.normalize();
+    const inverseWrist = wrist.getWorldQuaternion(new THREE.Quaternion()).invert();
+    const wristAxis = world(index).add(world(little)).multiplyScalar(.5).sub(origin).cross(normal).normalize().applyQuaternion(inverseWrist);
+    tracks.push({node:wrist, wrist:true, axis:wristAxis,
+      swayAxis:normal.clone().applyQuaternion(inverseWrist),
+      angle:3*Math.PI/180, amplitude:1.8*Math.PI/180, phase,
+      sway:sign*.8*Math.PI/180, offset:new THREE.Quaternion(), lateral:new THREE.Quaternion()});
+    for (const [finger, angles, fingerPhase] of [
+      ['Index',[13,25,14],0], ['Middle',[16,30,17],.025],
+      ['Ring',[19,34,19],.05], ['Little',[22,37,21],.075],
+      ['Thumb',[7,10],.1],
+    ]) {
+      const joints = finger === 'Thumb' ? ['Proximal','Distal'] : ['Proximal','Intermediate','Distal'];
+      for (let i=0;i<joints.length;i++) {
+        const node = bone(side+finger+joints[i]);
+        if (!node) continue;
+        const next = i+1<joints.length ? bone(side+finger+joints[i+1]) : null;
+        const previous = i>0 ? bone(side+finger+joints[i-1]) : wrist;
+        if (!next && !previous) continue;
+        const direction = next ? world(next).sub(world(node)) : world(node).sub(world(previous));
+        const axis = direction.cross(normal);
+        if (axis.lengthSq()<1e-12) continue;
+        axis.normalize().applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion()).invert());
+        tracks.push({node, rest:node.quaternion.clone(), axis,
+          angle:angles[i]*Math.PI/180, amplitude:(finger==='Thumb'?.3:.65)*Math.PI/180,
+          phase:phase+fingerPhase, offset:new THREE.Quaternion()});
+      }
+    }
+  }
+  return tracks;
+}
+
+function updateIdleHands(delta) {
+  if (!motionReduced) handIdleTime += Math.max(0,delta);
+  for (const track of idleHands) {
+    const movement = motionReduced ? 0 : track.amplitude*sampleHandIdle(handIdleTime+track.phase);
+    track.offset.setFromAxisAngle(track.axis,track.angle+movement);
+    if (track.wrist) {
+      // Body idle was freshly sampled this frame. Preserve its wrist rotation;
+      // the scenario mixer runs afterwards and owns the final action pose.
+      track.lateral.setFromAxisAngle(track.swayAxis,motionReduced ? 0 : track.sway*sampleHandIdle(handIdleTime+track.phase-.22));
+      track.node.quaternion.multiply(track.offset).multiply(track.lateral);
+      continue;
+    }
+    // Absolute rest + offset each frame: never accumulate finger rotations.
+    track.node.quaternion.copy(track.rest).multiply(track.offset);
+  }
 }
 
 function loadVrmAnimation(file) {
@@ -981,6 +1065,7 @@ function updateSceneAnimation(delta) {
   if (state.elapsed >= state.duration) {
     stopSceneAnimation();
     updateIdle(0);
+    updateIdleHands(0);
     nextBlinkAt = performance.now() + 2200;
     setModelStatus('自然待机', '可以继续和我说话');
   }
@@ -1156,6 +1241,7 @@ function updateAvatar(delta) {
   restoreModelPose();
   clearGreetSecondary();
   const hasIdle = updateIdle(delta);
+  updateIdleHands(delta);
   updateSceneAnimation(delta);
   updateGaze(delta);
 
