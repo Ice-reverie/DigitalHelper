@@ -113,9 +113,11 @@ node --test tests/test_vrm_frontend.cjs
     ├── vrm_server.py           # FastAPI 服务端（对话 + TTS + 动作匹配 + 静态托管）
     └── static/
         ├── VRMCharacter.html   # 主页面
-        ├── js/
-        │   └── VRMCharacter.js # 渲染、口型、表情、动作、交互逻辑
-        └── animations/         # .vrma 动作文件目录（按命名触发）
+        └── js/
+            └── VRMCharacter.js # 渲染、口型、表情、动作、交互逻辑
+    models/
+    ├── characters/             # VRM 人物
+    └── animations/             # 场景_序号.vrma、待机及配套摆动数据
     docs/
     ├── 需求定义书.md            # 需求定义书
     └── 技术设计文档.md          # 技术设计文档

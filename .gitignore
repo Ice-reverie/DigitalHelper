@@ -51,3 +51,4 @@ vrm_demo/server_err.log
 /.env
 /.env.*
 !/.env.example
+/.pytest_cache/
