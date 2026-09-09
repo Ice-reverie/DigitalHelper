@@ -33,7 +33,7 @@ function frontend() {
     performance: { now: () => 500 },
     SpeechSynthesisUtterance: class { constructor(text) { this.text = text; } },
     atob: (value) => Buffer.from(value, 'base64').toString('binary'),
-    setTimeout, clearTimeout,
+    setTimeout, clearTimeout, AbortController,
   };
   const context = vm.createContext(sandbox);
   const source = fs.readFileSync(path.join(__dirname, '../vrm_demo/static/js/VRMCharacter.js'), 'utf8');
@@ -223,23 +223,92 @@ test('blinking closes then reopens both eyes and schedules the next blink', () =
 });
 
 
-test('scene actions deduplicate consecutive scenes and honor reduced motion', () => {
+test('each scene reply triggers a variant and honors reduced motion', () => {
   const f = frontend();
   f.run("currentVrm = {}; calls = []; playActionByName = name => calls.push(name); handleAction('booking'); handleAction('booking'); handleAction('confirm'); handleAction('booking');");
-  assert.deepEqual(Array.from(f.run('calls')), ['booking','confirm','booking']);
+  assert.deepEqual(Array.from(f.run('calls')), ['booking','booking','confirm','booking']);
   f.run("motionReduced = true; handleAction('wink');");
-  assert.equal(f.run('calls.length'), 3);
+  assert.equal(f.run('calls.length'), 4);
+});
+
+test('random variants exclude the last played version and support a single asset', () => {
+  const f = frontend();
+  f.run("variants = [1,2,3].map(n => ({id:'explain_'+n})); Math.random = () => 0;");
+  assert.equal(f.run("chooseVariant('explain',variants).id"), 'explain_1');
+  f.run("lastVariant.set('explain','explain_1')");
+  assert.equal(f.run("chooseVariant('explain',variants).id"), 'explain_2');
+  f.run('Math.random = () => .999');
+  assert.equal(f.run("chooseVariant('explain',variants).id"), 'explain_3');
+  assert.equal(f.run("chooseVariant('explain',[variants[0]]).id"), 'explain_1');
+  assert.throws(() => f.run("chooseVariant('explain',[])"));
+});
+
+test('repeated explain replies play both variants and stale loads do not change history', async () => {
+  const f = frontend();
+  f.run(`currentVrm = {}; played = []; Math.random = () => 0;
+    catalogPromise = Promise.resolve({explain:[{id:'explain_1',secondary:false},{id:'explain_2',secondary:false}]});
+    getSceneAnimation = async (name,id) => ({id});
+    playVrmAnimation = animation => { played.push(animation.id); scenePlayback = {}; };`);
+  for (let i=0;i<4;i++) await f.run("playActionByName('explain')");
+  assert.deepEqual(Array.from(f.run('played')), ['explain_1','explain_2','explain_1','explain_2']);
+  f.run('getSceneAnimation = () => new Promise(resolve => finishOld = resolve)');
+  const stale = f.run("playActionByName('explain')");
+  await Promise.resolve();
+  f.run("modelLoadId++; lastVariant.clear(); finishOld({id:'explain_1'});");
+  await stale;
+  assert.equal(f.run('lastVariant.size'), 0);
+  assert.equal(f.run('played.length'), 4);
+});
+
+test('catalog requests are shared, reject unknown variant paths and retry failures', async () => {
+  const f = frontend();
+  f.run("catalogData = Object.fromEntries(Object.keys(ACTION_LABELS).map(n => [n,[{id:n+'_1',secondary:false}]])); requests=0; fetch=async()=>{requests++; return {ok:true,json:async()=>catalogData};};");
+  const a = f.run('getAnimationCatalog()'), b = f.run('getAnimationCatalog()');
+  assert.equal(a,b);
+  await a;
+  assert.equal(f.run('requests'), 1);
+  f.run("catalogPromise=null; catalogData.explain[0].id='../characters/avatar';");
+  await assert.rejects(f.run('getAnimationCatalog()'));
+  f.run("catalogData.explain[0].id='explain_2';");
+  assert.equal((await f.run('getAnimationCatalog()')).explain[0].id, 'explain_2');
+});
+
+test('numbered body resources have independent caches', async () => {
+  const f = frontend();
+  f.run('loads=[]; createAnimationLoader=()=>({load(...a){loads.push(a);}});');
+  const a=f.run("getSceneAnimation('explain','explain_1')");
+  const b=f.run("getSceneAnimation('explain','explain_2')");
+  assert.equal(f.run('loads[0][0]'), '/api/animations/explain/explain_1');
+  assert.equal(f.run('loads[1][0]'), '/api/animations/explain/explain_2');
+  f.run('loads.forEach(a=>a[1]({userData:{vrmAnimations:[{}]}}))');
+  await Promise.all([a,b]);
+  await assert.rejects(f.run("getSceneAnimation('explain','greet_1')"));
+});
+
+test('seven-second explain secondary tracks use their own timeline and return to neutral', () => {
+  const f = frontend();
+  f.sandbox.explainCloth = JSON.parse(fs.readFileSync(path.join(__dirname,'../models/animations/explain_2.secondary.json')));
+  assert.equal(f.run('validateGreetSecondary(explainCloth).tracks.length'), 33);
+  f.run(`defaultAvatar=true; sampleIndex=-1;
+    q={clone(){return this},fromArray(a,i){sampleIndex=i;return this},slerp(){return this},multiply(){return this}};
+    state={name:'explain',elapsed:7,secondary:[{values:explainCloth.tracks[0].values,fps:24,target:{quaternion:q},current:q,next:q}]};
+    updateGreetSecondary(state);`);
+  assert.equal(f.run('sampleIndex'),168*4);
 });
 
 test('late scene loads and previous-model loads cannot replace current actions', async () => {
   const f = frontend();
   f.run("currentVrm = {}; played = []; pending = {}; getSceneAnimation = name => new Promise(resolve => pending[name] = resolve); playVrmAnimation = (a,l,n) => played.push(n); THREE.LoopOnce = 1;");
+  f.run("catalogPromise = Promise.resolve(Object.fromEntries(Object.keys(ACTION_LABELS).map(n => [n,[{id:n+'_1',secondary:false}]])));");
   const old = f.run("playActionByName('greet')");
+  await Promise.resolve();
   const fresh = f.run("playActionByName('wink')");
+  await Promise.resolve();
   f.run("pending.wink({}); pending.greet({});");
   await Promise.all([old,fresh]);
   assert.deepEqual(Array.from(f.run('played')), ['wink']);
   const changing = f.run("playActionByName('thanks')");
+  await Promise.resolve();
   f.run('modelLoadId += 1; pending.thanks({});');
   await changing;
   assert.equal(f.run('played.length'), 1);
@@ -304,4 +373,82 @@ test('held action samples survive idle writes when the mixer skips unchanged val
       held.push(target.weight);
     }`);
   assert.ok(Array.from(f.run('held')).every(value => value === 1));
+});
+
+test('greet keeps reference smile and blink while speech retains mouth ownership', () => {
+  const f = frontend();
+  f.run(`sample = {humanoidTracks:{rotation:new Map([['head',1],['rightEye',2]]),translation:new Map()},
+    expressionTracks:{preset:new Map([['happy',1],['aa',2],['blink',3]]),custom:new Map()}};
+    model = {expressionManager:{getExpression(){return true;}}};`);
+  assert.equal(f.run("FULL_EXPRESSION_ACTIONS.has('greet')"), false);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'greet',model).expressionTracks.preset.keys()")), ['happy','blink']);
+  assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'greet',model).humanoidTracks.rotation.keys()")), ['head']);
+});
+
+test('greet cloth assets reject malformed data and non-clothing targets', () => {
+  const f = frontend();
+  const data = JSON.parse(fs.readFileSync(path.join(__dirname, '../models/animations/greet_1.secondary.json')));
+  f.sandbox.clothData = data;
+  assert.equal(f.run('validateGreetSecondary(clothData).tracks.length'), 22);
+  for (const mutate of [d => d.fps=30, d => d.tracks[0].values[0]=.5,
+    d => d.tracks[0].nodeName='15.joint_Head', d => d.tracks.push(d.tracks[0]),
+    d => d.tracks[0].values[40]=NaN]) {
+    const bad = structuredClone(data); mutate(bad); f.sandbox.clothData = bad;
+    assert.throws(() => f.run('validateGreetSecondary(clothData)'));
+  }
+});
+
+test('cloth offsets do not accumulate and clear on cancel, other avatars, and reduced motion', () => {
+  const f = frontend();
+  f.run(`class Q {
+    constructor(v=0){this.v=v;} clone(){return new Q(this.v);} copy(q){this.v=q.v;return this;}
+    fromArray(a,i){this.v=a[i];return this;} slerp(q,t){this.v+=(q.v-this.v)*t;return this;}
+    multiply(q){this.v+=q.v;return this;}
+  }
+  clothTarget={quaternion:new Q(.1)};
+  values=Array.from({length:292},(_,i)=>i%4===0?.02:0);
+  state={name:'greet',elapsed:1,secondary:[{target:clothTarget,values,current:new Q(),next:new Q()}]};
+  defaultAvatar=true;
+  for(let i=0;i<120;i++){clearGreetSecondary();updateGreetSecondary(state);}`);
+  assert.ok(Math.abs(f.run('clothTarget.quaternion.v')-.12)<1e-9);
+  f.run('stopSceneAnimation()');
+  assert.equal(f.run('clothTarget.quaternion.v'), .1);
+  for (const setup of ["defaultAvatar=false", "defaultAvatar=true;motionReduced=true", "motionReduced=false;state.secondary=[]"]) {
+    f.run(`${setup};updateGreetSecondary(state)`);
+    assert.equal(f.run('clothTarget.quaternion.v'), .1);
+  }
+});
+
+test('optional cloth failures and stale avatar loads fall back to the body animation', async () => {
+  const f = frontend();
+  f.sandbox.AbortController = AbortController;
+  f.sandbox.fetch = async () => { throw new Error('offline'); };
+  assert.deepEqual(Array.from(await f.run('loadGreetSecondary({}, {}, 1)')), []);
+  f.sandbox.fetch = async () => ({ok:true,json:async()=>({version:1,fps:24,duration:3,tracks:[]})});
+  assert.deepEqual(Array.from(await f.run('loadGreetSecondary({}, {}, -1)')), []);
+});
+
+test('reference blink does not block live speech and automatic blinking resumes', () => {
+  const f = frontend();
+  f.run(`currentVrm={update(){}}; activeAction={}; browserSpeaking=true;
+    autoBlinks=0; mouthValues={}; updateBlink=()=>autoBlinks++;
+    updateIdle=()=>true; updateSceneAnimation=()=>{};
+    setExpression=(name,value)=>mouthValues[name]=value;
+    scenePlayback={name:'greet',fullExpression:false,expressions:['happy','blink']};
+    updateAvatar(1/24);`);
+  assert.equal(f.run('autoBlinks'),0);
+  assert.ok(Object.values(f.run('mouthValues')).some(v=>v>0));
+  f.run('scenePlayback=null;updateAvatar(1/24);');
+  assert.equal(f.run('autoBlinks'),1);
+});
+
+test('rejected greet clips release the temporary smile expression', () => {
+  const f = frontend();
+  f.run(`cleanup=[]; currentVrm={expressionManager:{unregisterExpression(){cleanup.push('unregister');}}};
+    createGreetSmile=()=>({binds:[{clearAppliedWeight(){cleanup.push('clear');}}],removeFromParent(){cleanup.push('remove');}});
+    filteredSceneAnimation=()=>({});
+    createVRMAnimationClip=()=>{throw new Error('Invalid clip');};`);
+  assert.throws(()=>f.run("playVrmAnimation({},1,'greet')"),/Invalid clip/);
+  assert.deepEqual(Array.from(f.run('cleanup')),['clear','unregister','remove']);
+  assert.equal(f.run('scenePlayback'),null);
 });

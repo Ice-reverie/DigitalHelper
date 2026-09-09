@@ -17,6 +17,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+if __package__:
+    from .model_gateway import reply_with_model, configuration as model_configuration
+else:
+    from model_gateway import reply_with_model, configuration as model_configuration
+
 try:
     import edge_tts
 except ImportError:  # Browser speech synthesis remains available as a fallback.
@@ -59,13 +64,61 @@ async def default_idle():
 SCENE_ACTIONS = frozenset({"greet", "explain", "alert", "booking", "confirm", "thanks", "wink"})
 
 
+def animation_variants(name):
+    if name not in SCENE_ACTIONS:
+        raise HTTPException(status_code=404, detail="Unknown animation")
+    directory = os.path.join(BASE_DIR, "..", "models", "animations")
+    variants = []
+    for filename in os.listdir(directory):
+        match = re.fullmatch(re.escape(name) + r"_([1-9][0-9]*)\.vrma", filename)
+        if match and os.path.isfile(os.path.join(directory, filename)):
+            variants.append((int(match[1]), filename[:-5]))
+    return [variant for _, variant in sorted(variants)]
+
+
+def variant_path(name, variant, suffix):
+    if variant not in animation_variants(name):
+        raise HTTPException(status_code=404, detail="Unknown animation variant")
+    path = os.path.join(BASE_DIR, "..", "models", "animations", variant + suffix)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Animation file not found")
+    return path
+
+
+@app.get("/api/animations")
+async def animation_catalog():
+    return {name: [{"id": variant,
+                    "secondary": os.path.isfile(os.path.join(BASE_DIR, "..", "models", "animations", variant + ".secondary.json"))}
+                   for variant in animation_variants(name)] for name in sorted(SCENE_ACTIONS)}
+
+
+@app.get("/api/animations/greet/secondary")
+async def greet_secondary():
+    path = os.path.join(BASE_DIR, "..", "models", "animations", "greet_1.secondary.json")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Secondary animation not found")
+    return FileResponse(path, media_type="application/json")
+
+
+@app.get("/api/animations/{name}/{variant}/secondary")
+async def variant_secondary(name: str, variant: str):
+    return FileResponse(variant_path(name, variant, ".secondary.json"), media_type="application/json")
+
+
+@app.get("/api/animations/{name}/{variant}")
+async def scene_animation_variant(name: str, variant: str):
+    return FileResponse(variant_path(name, variant, ".vrma"), media_type="model/gltf-binary")
+
+
 @app.get("/api/animations/{name}")
 async def scene_animation(name: str):
     if name not in SCENE_ACTIONS:
         raise HTTPException(status_code=404, detail="Unknown animation")
-    path = os.path.join(BASE_DIR, "..", "models", "animations", name + ".vrma")
-    if not os.path.isfile(path):
+    # Legacy clients keep a stable first variant; new clients select from the catalog.
+    variants = animation_variants(name)
+    if not variants:
         raise HTTPException(status_code=404, detail="Animation file not found")
+    path = variant_path(name, variants[0], ".vrma")
     return FileResponse(path, media_type="model/gltf-binary")
 
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
@@ -380,7 +433,8 @@ async def index():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "tts_available": edge_tts is not None}
+    return {"status": "ok", "tts_available": edge_tts is not None,
+            "llm_configured": model_configuration() is not None}
 
 
 @app.on_event("startup")
@@ -397,6 +451,7 @@ async def _warmup_tts():
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     result = build_reply(req.text, req.context)
+    result = await reply_with_model(req.text, req.context, result)
     sentences = split_sentence(result["reply"])
 
     # edge_tts cannot run in parallel (WebSocket contention), so synthesize

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { VRMLoaderPlugin, VRMUtils, VRMExpression, VRMExpressionMorphTargetBind } from '@pixiv/three-vrm';
 import { createVRMAnimationClip, VRMAnimationLoaderPlugin } from '@pixiv/three-vrm-animation';
 
 
@@ -39,14 +39,21 @@ let currentVrm = null;
 let avatarBounds = null;
 let modelLoadId = 0;
 let idleAnimation = null;
+let defaultAvatar = false;
+let avatarGltf = null;
+const secondaryCache = new Map();
+let greetApplied = [];
 let gazeTarget = null;
 const gazePointer = { x: 0, y: 0, smoothX: 0, smoothY: 0 };
 const ACTION_LABELS = { greet:'问候', explain:'讲解', alert:'预警提醒', booking:'预约引导', confirm:'确认', thanks:'致谢', wink:'轻松互动' };
 // Actions listed here keep their full facial animation (blink / mouth / eyes).
 // While one plays, auto-blink, lip-sync and gaze are paused, then restored.
 // Add an action name here to give it the same treatment.
-const FULL_EXPRESSION_ACTIONS = new Set(['greet', 'explain', 'alert', 'booking', 'confirm', 'thanks', 'wink']);
+// Greet owns its reference smile/blink; live speech still owns the mouth.
+const FULL_EXPRESSION_ACTIONS = new Set(['explain', 'alert', 'booking', 'confirm', 'thanks', 'wink']);
 const actionCache = new Map();
+let catalogPromise = null;
+const lastVariant = new Map();
 let actionRequestId = 0;
 let lastSceneAction = null;
 let scenePlayback = null;
@@ -429,6 +436,8 @@ function loadVrm(url, name, release = () => {}) {
     return;
   }
   const loadId = ++modelLoadId;
+  secondaryCache.clear();
+  lastVariant.clear();
   actionRequestId += 1;
   lastSceneAction = null;
   stopSceneAnimation();
@@ -451,6 +460,8 @@ function loadVrm(url, name, release = () => {}) {
       if (url.startsWith('/api/avatar')) tuneCompanionFace(vrm);
       if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
       currentVrm = vrm;
+      defaultAvatar = url === '/api/avatar';
+      avatarGltf = gltf;
       idleAnimation = null;
       mixer = null;
       activeAction = null;
@@ -473,7 +484,11 @@ function loadVrm(url, name, release = () => {}) {
       nextBlinkAt = performance.now() + 2200;
       blinking = false;
       if (url.startsWith('/api/avatar')) loadDefaultIdle(gltf, vrm, loadId);
-      Object.keys(ACTION_LABELS).forEach(name => getSceneAnimation(name).catch(() => {}));
+      getAnimationCatalog().then(catalog => {
+        for (const [name, variants] of Object.entries(catalog)) {
+          for (const variant of variants) getSceneAnimation(name, variant.id).catch(() => {});
+        }
+      }).catch(() => {});
       elements.avatarPlaceholder.hidden = true;
       setModelStatus('3D 模型已加载', '可以测试挥手和对话');
       document.getElementById('reset-view-btn').hidden = false;
@@ -580,20 +595,54 @@ function loadVrmAnimation(file) {
   }, undefined, () => { URL.revokeObjectURL(url); });
 }
 
-function getSceneAnimation(name) {
-  if (!Object.hasOwn(ACTION_LABELS, name)) return Promise.reject(new Error('Unknown action'));
-  if (!actionCache.has(name)) {
+function getAnimationCatalog() {
+  if (!catalogPromise) {
+    const pending = (async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch('/api/animations', {signal:controller.signal});
+        if (!response.ok) throw new Error('Animation catalog unavailable');
+        const data = await response.json();
+        const catalog = {};
+        for (const name of Object.keys(ACTION_LABELS)) {
+          if (!Array.isArray(data[name])) throw new Error('Invalid animation catalog');
+          const ids = new Set();
+          catalog[name] = data[name].map(variant => {
+            if (!new RegExp(`^${name}_[1-9][0-9]*$`).test(variant?.id) || ids.has(variant.id) || typeof variant.secondary !== 'boolean') throw new Error('Invalid variant');
+            ids.add(variant.id);
+            return {id:variant.id, secondary:variant.secondary};
+          });
+        }
+        return catalog;
+      } finally { clearTimeout(timer); }
+    })();
+    catalogPromise = pending;
+    pending.catch(() => { if (catalogPromise === pending) catalogPromise = null; });
+  }
+  return catalogPromise;
+}
+
+function chooseVariant(name, variants) {
+  if (!variants.length) throw new Error('No available animation');
+  const candidates = variants.length > 1 ? variants.filter(v => v.id !== lastVariant.get(name)) : variants;
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+function getSceneAnimation(name, variant = `${name}_1`) {
+  if (!Object.hasOwn(ACTION_LABELS, name) || !new RegExp(`^${name}_[1-9][0-9]*$`).test(variant)) return Promise.reject(new Error('Unknown action'));
+  if (!actionCache.has(variant)) {
     const pending = new Promise((resolve, reject) => {
-      createAnimationLoader().load(`/api/animations/${name}`, gltf => {
+      createAnimationLoader().load(`/api/animations/${name}/${variant}`, gltf => {
         const animation = gltf.userData.vrmAnimations?.[0];
         if (animation) resolve(animation);
         else reject(new Error('Empty animation'));
       }, undefined, reject);
     });
-    actionCache.set(name, pending);
-    pending.catch(() => { if (actionCache.get(name) === pending) actionCache.delete(name); });
+    actionCache.set(variant, pending);
+    pending.catch(() => { if (actionCache.get(variant) === pending) actionCache.delete(variant); });
   }
-  return actionCache.get(name);
+  return actionCache.get(variant);
 }
 
 async function playActionByName(name) {
@@ -601,9 +650,19 @@ async function playActionByName(name) {
   const vrm = currentVrm;
   const modelId = modelLoadId;
   try {
-    const animation = await getSceneAnimation(name);
+    const catalog = await getAnimationCatalog();
+    if (id !== actionRequestId || modelId !== modelLoadId || currentVrm !== vrm || motionReduced) return;
+    const variant = chooseVariant(name, catalog[name] || []);
+    const [animation, secondary] = await Promise.all([
+      getSceneAnimation(name, variant.id), getVariantSecondary(name, variant, vrm, modelId),
+    ]);
     if (id !== actionRequestId || modelId !== modelLoadId || currentVrm !== vrm || motionReduced) return;
     playVrmAnimation(animation, THREE.LoopOnce, name);
+    if (scenePlayback) {
+      scenePlayback.secondary = secondary;
+      scenePlayback.variant = variant.id;
+      lastVariant.set(name, variant.id);
+    }
     setModelStatus(`正在${ACTION_LABELS[name]}`, '动作结束后自动恢复自然待机');
   } catch (error) {
     if (id !== actionRequestId || modelId !== modelLoadId) return;
@@ -639,7 +698,7 @@ function filteredSceneAnimation(animation, name, vrm) {
     },
     expressionTracks: {
       preset:new Map([...animation.expressionTracks.preset].filter(([key]) =>
-        !VOWELS.includes(key) && (!isBlink(key) || name === 'wink') && vrm.expressionManager?.getExpression(key))),
+        !VOWELS.includes(key) && (!isBlink(key) || name === 'wink' || (name === 'greet' && key === 'blink')) && vrm.expressionManager?.getExpression(key))),
       custom:new Map([...animation.expressionTracks.custom].filter(([key]) => vrm.expressionManager?.getExpression(key))),
     },
   };
@@ -652,9 +711,93 @@ function restoreModelPose() {
   }
 }
 
+function validateGreetSecondary(data) {
+  if (data?.version !== 1 || data.fps !== 24 || !Number.isFinite(data.duration) || data.duration <= 0 || data.duration > 30 || !Number.isInteger(data.duration * data.fps) || !Array.isArray(data.tracks) || data.tracks.length > 64) throw new Error('Invalid secondary animation');
+  const samples = data.duration * data.fps + 1;
+  const names = new Set();
+  for (const t of data.tracks) {
+    if (typeof t.nodeName !== 'string' || !/^\d+\.joint_(?:\+AmiceB |\+HairS |___0_)/.test(t.nodeName) || names.has(t.nodeName) || !Array.isArray(t.values) || t.values.length !== samples*4 || !t.values.every(Number.isFinite)) throw new Error('Invalid cloth track');
+    names.add(t.nodeName);
+    for (let i=0; i<t.values.length; i+=4) {
+      if (Math.abs(Math.hypot(...t.values.slice(i,i+4))-1) > .001) throw new Error('Invalid cloth rotation');
+    }
+    for (const i of [0,(samples-1)*4]) {
+      if (Math.hypot(...t.values.slice(i,i+3)) > .00001 || Math.abs(t.values[i+3]-1) > .00001) throw new Error('Open cloth endpoints');
+    }
+  }
+  return data;
+}
+
+function getVariantSecondary(name, variant, vrm, loadId) {
+  if (!variant.secondary || !defaultAvatar || !avatarGltf) return Promise.resolve([]);
+  if (!secondaryCache.has(variant.id)) {
+    secondaryCache.set(variant.id, loadGreetSecondary(avatarGltf, vrm, loadId, `/api/animations/${name}/${variant.id}/secondary`));
+  }
+  return secondaryCache.get(variant.id);
+}
+
+async function loadGreetSecondary(gltf, vrm, loadId, url = '/api/animations/greet/greet_1/secondary') {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  try {
+    const response = await fetch(url, {signal:controller.signal});
+    if (!response.ok) return [];
+    const data = validateGreetSecondary(await response.json());
+    const tracks = await Promise.all(data.tracks.map(async t => {
+      const matches = gltf.parser.json.nodes.map((n,i) => n.name === t.nodeName ? i : -1).filter(i => i >= 0);
+      if (matches.length !== 1) throw new Error('Missing or ambiguous cloth bone');
+      const target = await gltf.parser.getDependency('node', matches[0]);
+      return {...t, fps:data.fps, duration:data.duration, target, current:new THREE.Quaternion(), next:new THREE.Quaternion()};
+    }));
+    return loadId === modelLoadId && currentVrm === vrm ? tracks : [];
+  } catch { return []; }
+  finally { clearTimeout(timer); }
+}
+
+function clearGreetSecondary() {
+  for (const p of greetApplied) p.target.quaternion.copy(p.base);
+  greetApplied = [];
+}
+
+function updateGreetSecondary(state) {
+  if (motionReduced || !defaultAvatar) return;
+  for (const t of state.secondary || []) {
+    const end = t.values.length/4 - 1;
+    const frame = Math.max(0, Math.min(end, state.elapsed * (t.fps || 24)));
+    const index = Math.min(end-1, Math.floor(frame));
+    const base = t.target.quaternion.clone();
+    t.current.fromArray(t.values, index*4);
+    t.next.fromArray(t.values, (index+1)*4);
+    t.current.slerp(t.next, frame-index);
+    t.target.quaternion.multiply(t.current);
+    greetApplied.push({target:t.target, base});
+  }
+}
+
+function createGreetSmile(vrm) {
+  if (!defaultAvatar || vrm.expressionManager?.getExpression('happy')) return null;
+  const expression = new VRMExpression('happy');
+  vrm.scene.traverse(mesh => {
+    for (const [name,weight] of [['34.口角上げ',.5],['39.にこり',.2]]) {
+      const index = mesh.morphTargetDictionary?.[name];
+      if (index !== undefined) expression.addBind(new VRMExpressionMorphTargetBind({primitives:[mesh], index, weight}));
+    }
+  });
+  if (!expression.binds.length) return null;
+  vrm.expressionManager.registerExpression(expression);
+  vrm.scene.add(expression);
+  return expression;
+}
+
 function stopSceneAnimation() {
+  clearGreetSecondary();
   if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(animationRig); }
   if (scenePlayback) scenePlayback.expressions.forEach(name => setExpression(name, 0));
+  if (scenePlayback?.greetSmile) {
+    scenePlayback.greetSmile.binds.forEach(bind => bind.clearAppliedWeight());
+    currentVrm.expressionManager.unregisterExpression(scenePlayback.greetSmile);
+    scenePlayback.greetSmile.removeFromParent();
+  }
   mixer = null;
   animationRig = null;
   activeAction = null;
@@ -667,6 +810,8 @@ function playVrmAnimation(animation, loopMode, name = 'preview') {
   const from = new Map(modelPose.map(p => [p.name, { rotation:p.node.quaternion.clone(), position:p.node.position.clone() }]));
   stopSceneAnimation();
   waveState = null;
+  const greetSmile = name === 'greet' ? createGreetSmile(currentVrm) : null;
+  try {
   const filtered = filteredSceneAnimation(animation, name, currentVrm);
   const clip = createVRMAnimationClip(filtered, currentVrm);
   if (!clip.tracks.length || !Number.isFinite(clip.duration) || clip.duration <= 0) throw new Error('Empty clip');
@@ -696,12 +841,23 @@ function playVrmAnimation(animation, loopMode, name = 'preview') {
   activeAction.setLoop(THREE.LoopOnce, 1);
   activeAction.clampWhenFinished = true;
   activeAction.play();
-  scenePlayback = { name, fullExpression:(name === 'preview' || FULL_EXPRESSION_ACTIONS.has(name)), elapsed:0, duration:clip.duration, from, bindings,
+  scenePlayback = { name, greetSmile, fullExpression:(name === 'preview' || FULL_EXPRESSION_ACTIONS.has(name)), elapsed:0, duration:clip.duration, from, bindings,
     expressions:[...filtered.expressionTracks.preset.keys(), ...filtered.expressionTracks.custom.keys()],
     bases:modelPose.map(p => ({...p, baseRotation:p.rotation.clone(), basePosition:p.position.clone()})),
   };
   if (scenePlayback.fullExpression && currentVrm?.lookAt) currentVrm.lookAt.target = null;
-  if (name === 'wink') { blinking = false; setExpression('blink', 0); }
+  if (name === 'wink' || name === 'greet') { blinking = false; setExpression('blink', 0); }
+  } catch (error) {
+    // Registration precedes clip construction so its expression track can bind.
+    // A rejected clip must not leave that temporary expression on the model.
+    if (greetSmile && !scenePlayback) {
+      greetSmile.binds.forEach(bind => bind.clearAppliedWeight());
+      currentVrm.expressionManager.unregisterExpression(greetSmile);
+      greetSmile.removeFromParent();
+    }
+    stopSceneAnimation();
+    throw error;
+  }
 }
 
 function updateSceneAnimation(delta) {
@@ -735,6 +891,7 @@ function updateSceneAnimation(delta) {
     const value = currentVrm.expressionManager.getValue(name) || 0;
     setExpression(name, value * Math.min(enter, leave));
   }
+  updateGreetSecondary(state);
   if (state.elapsed >= state.duration) {
     stopSceneAnimation();
     updateIdle(0);
@@ -878,11 +1035,12 @@ function updateAvatar(delta) {
   if (!currentVrm) return;
   const now = performance.now();
   restoreModelPose();
+  clearGreetSecondary();
   const hasIdle = updateIdle(delta);
   updateSceneAnimation(delta);
   updateGaze(delta);
 
-  if (!scenePlayback?.fullExpression) updateBlink(now);
+  if (!scenePlayback?.fullExpression && !(scenePlayback?.name === 'greet' && scenePlayback.expressions.includes('blink'))) updateBlink(now);
   if (!scenePlayback?.fullExpression && currentVisemes && audioContext) {
     const elapsed = audioContext.currentTime - currentVisemes.startTime;
     const timeline = currentVisemes.timeline;
