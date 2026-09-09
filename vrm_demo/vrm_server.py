@@ -262,6 +262,7 @@ def analyze_audio(audio):
 class ChatRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     context: Dict[str, str] = Field(default_factory=dict)
+    history: List[Dict[str, str]] = Field(default_factory=list)
 
 
 def match_action(text: str):
@@ -472,7 +473,7 @@ async def _warmup_tts():
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     result = build_reply(req.text, req.context)
-    result = await reply_with_model(req.text, req.context, result)
+    result = await reply_with_model(req.text, req.context, result, req.history)
     sentences = split_sentence(result["reply"])
 
     # edge_tts cannot run in parallel (WebSocket contention), so synthesize
