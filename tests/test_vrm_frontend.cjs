@@ -569,6 +569,15 @@ test('greet keeps reference smile and blink while speech retains mouth ownership
   assert.deepEqual(Array.from(f.run("filteredSceneAnimation(sample,'greet',model).humanoidTracks.rotation.keys()")), ['head']);
 });
 
+test('secondary rotations match VRM0 humanoid handedness without mutating source data', () => {
+  const f = frontend();
+  f.run('sourceTwist=[.2,.3,.4,.5];');
+  assert.deepEqual(Array.from(f.run("secondaryValuesForVrm(sourceTwist,{meta:{metaVersion:'0'}})")),[-.2,.3,-.4,.5]);
+  assert.deepEqual(Array.from(f.run("secondaryValuesForVrm(sourceTwist,{meta:{metaVersion:'1'}})")),[.2,.3,.4,.5]);
+  assert.deepEqual(Array.from(f.run('sourceTwist')),[.2,.3,.4,.5]);
+  assert.equal(f.run("secondaryValuesForVrm(sourceTwist,{meta:{metaVersion:'1'}}) === sourceTwist"),false);
+});
+
 test('greet cloth assets reject malformed data and non-clothing targets', () => {
   const f = frontend();
   const data = JSON.parse(fs.readFileSync(path.join(__dirname, '../models/animations/greet_1.secondary.json')));

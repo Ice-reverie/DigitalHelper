@@ -917,11 +917,19 @@ async function loadGreetSecondary(gltf, vrm, loadId, url = '/api/animations/gree
       const matches = gltf.parser.json.nodes.map((n,i) => n.name === t.nodeName ? i : -1).filter(i => i >= 0);
       if (matches.length !== 1) throw new Error('Missing or ambiguous cloth bone');
       const target = await gltf.parser.getDependency('node', matches[0]);
-      return {...t, fps:data.fps, duration:data.duration, target, current:new THREE.Quaternion(), next:new THREE.Quaternion()};
+      return {...t, values:secondaryValuesForVrm(t.values, vrm), fps:data.fps, duration:data.duration, target, current:new THREE.Quaternion(), next:new THREE.Quaternion()};
     }));
     return loadId === modelLoadId && currentVrm === vrm ? tracks : [];
   } catch { return []; }
   finally { clearTimeout(timer); }
+}
+
+function secondaryValuesForVrm(values, vrm) {
+  // Match three-vrm-animation's VRM 1 -> VRM 0 humanoid conversion.
+  // Otherwise the palm and its weighted forearm helpers roll oppositely.
+  return vrm.meta?.metaVersion === '0'
+    ? values.map((value, index) => index % 2 === 0 ? -value : value)
+    : values.slice();
 }
 
 function clearGreetSecondary() {
