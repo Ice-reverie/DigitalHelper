@@ -6,7 +6,20 @@
 
 本版支持 OpenAI 兼容的 Chat Completions JSON 协议。协议参考：[请求格式](https://api-docs.deepseek.com/api/create-chat-completion/)、[JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)。不包括 Responses、Anthropic 原生协议或任意请求模板；API Key 设置页面暂未加入。
 
-安装可选客户端：`python -m pip install "httpx>=0.27,<1"`（也已列入 requirements.txt）。在启动项目的 PowerShell 中设置：
+安装依赖：`python -m pip install "httpx>=0.27,<1" "python-dotenv>=1,<2"`（也已列入 requirements.txt）。
+
+直接编辑项目根目录 `.env`。如果没有该文件，复制 `.env.example` 并重命名为 `.env`，填写：
+
+```dotenv
+DIGITALHELPER_LLM_PROTOCOL=openai-compatible
+DIGITALHELPER_LLM_API_KEY=你的APIKey
+DIGITALHELPER_LLM_BASE_URL=https://你的服务地址/v1
+DIGITALHELPER_LLM_MODEL=你的模型名
+```
+
+保存后停止已有后端，再运行 `run.cmd`。后端启动时自动读取根目录 `.env`，不依赖启动时所在目录；修改配置需要重启。文件缺失或配置为空时，继续使用本地规则。`.env` 已加入 Git 忽略，`.env.example` 仅保存空模板；不要把真实 Key 填进模板。
+
+仍支持通过进程环境变量配置，**环境变量优先于 `.env`，包括显式设置为空的值**。若之前在终端配置过模型，请新开终端或清除对应变量后再启动，避免覆盖 `.env`。例如临时配置：
 
 ```powershell
 $env:DIGITALHELPER_LLM_PROTOCOL = 'openai-compatible'
@@ -17,7 +30,7 @@ $env:DIGITALHELPER_LLM_API_KEY = [System.Net.NetworkCredential]::new('', $secret
 .\run.cmd
 ```
 
-Base URL 填服务商文档要求的前缀，系统追加 `/chat/completions`；不要填完整接口路径。远程服务要求 HTTPS，本机 localhost/127.0.0.1/::1 支持 HTTP。配置只由服务端进程读取，不写入仓库、不返回前端。环境变量只影响从当前终端新启动的进程；已有服务需要重新启动。删除 Key 后重新启动即可恢复规则模式：`Remove-Item Env:DIGITALHELPER_LLM_API_KEY`。
+Base URL 填服务商文档要求的前缀，系统追加 `/chat/completions`；不要填完整接口路径。远程服务要求 HTTPS，本机 localhost/127.0.0.1/::1 支持 HTTP。配置只由服务端进程读取，不返回前端。要恢复规则模式，清空 `.env` 中的 Key，并确保没有同名进程环境变量，再重启后端。Key 包含空格或 `#` 时可使用单引号包裹；`${...}` 不会被变量插值替换。
 
 `GET /api/health` 新增 `llm_configured`，仅表示配置完整且客户端可用，不表示网络或 Key 已验证。没有配置、配置缺项、不支持的协议或缺少 httpx 都使用规则模式。请求超时（总计15秒）、401/429/5xx、格式错误、拒答、无依据服务介绍及非法动作也回退规则；不在日志中记录 Key、用户原文或上游错误内容。
 

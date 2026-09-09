@@ -54,11 +54,11 @@ if /i "%~1"=="--check" (
     set "RUN_EXIT=0"
     goto :finish
 )
-"%RUN_PYTHON%" %RUN_PYTHON_ARGS% -c "import fastapi, uvicorn, pydantic" >nul 2>&1
+"%RUN_PYTHON%" %RUN_PYTHON_ARGS% -c "import fastapi, uvicorn, pydantic, dotenv" >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Required dependencies are missing in this environment.
     echo Install them with:
-    echo "%RUN_PYTHON%" %RUN_PYTHON_ARGS% -m pip install fastapi uvicorn pydantic edge-tts
+    echo "%RUN_PYTHON%" %RUN_PYTHON_ARGS% -m pip install fastapi uvicorn pydantic edge-tts httpx python-dotenv
     set "RUN_EXIT=1"
     goto :finish
 )

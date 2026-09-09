@@ -46,3 +46,8 @@ vrm_server.log
 vrm_server_err.log
 vrm_demo/server_out.log
 vrm_demo/server_err.log
+
+# Local backend credentials; only the blank example belongs in Git.
+/.env
+/.env.*
+!/.env.example

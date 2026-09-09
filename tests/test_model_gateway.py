@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -17,6 +19,41 @@ CONFIG = {"DIGITALHELPER_LLM_API_KEY": "test-secret",
 
 def answer(reply="我在这里陪您聊聊。", action=None, sources=None):
     return {"reply": reply, "action": action, "sources": sources or [], "abstain": False}
+
+
+class BackendEnvTests(unittest.TestCase):
+    def test_file_configuration_handles_bom_quotes_and_literal_key(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            path = Path(directory) / '.env'
+            path.write_text("DIGITALHELPER_LLM_API_KEY='test # ${LITERAL}'\n"
+                            "DIGITALHELPER_LLM_BASE_URL=https://example.invalid/v1\n"
+                            "DIGITALHELPER_LLM_MODEL=test-model\n", encoding='utf-8-sig')
+            gateway.load_backend_env(path)
+            config = gateway.configuration()
+            self.assertEqual(config['key'], 'test # ${LITERAL}')
+            self.assertEqual(config['model'], 'test-model')
+            self.assertEqual(config['base'], 'https://example.invalid/v1')
+
+    def test_existing_environment_wins_even_when_empty(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, CONFIG, clear=True):
+            path = Path(directory) / '.env'
+            path.write_text('DIGITALHELPER_LLM_API_KEY=file-key\nDIGITALHELPER_LLM_MODEL=file-model\n')
+            gateway.load_backend_env(path)
+            self.assertEqual(gateway.configuration()['key'], 'test-secret')
+            self.assertEqual(gateway.configuration()['model'], 'test-model')
+            os.environ['DIGITALHELPER_LLM_API_KEY'] = ''
+            gateway.load_backend_env(path)
+            self.assertIsNone(gateway.configuration())
+
+    def test_missing_and_blank_file_keep_rule_mode(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            path = Path(directory) / '.env'
+            gateway.load_backend_env(path)
+            self.assertIsNone(gateway.configuration())
+            path.write_text('DIGITALHELPER_LLM_API_KEY=\n')
+            gateway.load_backend_env(path)
+            self.assertIsNone(gateway.configuration())
+        self.assertEqual(gateway.ENV_PATH, Path(gateway.__file__).resolve().parents[1] / '.env')
 
 
 class ModelGatewayTests(unittest.IsolatedAsyncioTestCase):

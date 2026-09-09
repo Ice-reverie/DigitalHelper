@@ -3,7 +3,21 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from urllib.parse import urlsplit
+
+from dotenv import load_dotenv
+
+
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+
+
+def load_backend_env(path=ENV_PATH):
+    # Explicit process configuration wins; preserve literal characters in API keys.
+    return load_dotenv(path, override=False, interpolate=False, encoding="utf-8-sig")
+
+
+load_backend_env()
 
 try:
     import httpx
