@@ -76,6 +76,8 @@ let speaking = false;
 let browserSpeaking = false;
 let speechSourceRef = null;
 let playbackStopped = false;
+let speechGeneration = 0;
+let cancelSpeechPlayback = null;
 const VOWELS = ['aa', 'ih', 'ou', 'ee', 'oh'];
 const mouthWeights = Object.fromEntries(VOWELS.map(name => [name, 0]));
 const WAVE_DURATION = 2600;
@@ -1112,13 +1114,14 @@ async function initAudioContext() {
 
 function stopCurrentSpeech() {
   playbackStopped = true;
-  if (speechSourceRef) {
-    try { speechSourceRef.stop(); } catch {}
-    speechSourceRef = null;
-  }
-  if (window.speechSynthesis) {
-    window.speechSynthesis.cancel();
-  }
+  speechGeneration += 1;
+  const source = speechSourceRef;
+  const cancel = cancelSpeechPlayback;
+  speechSourceRef = null;
+  cancelSpeechPlayback = null;
+  cancel?.();
+  if (source) { try { source.stop(); } catch {} }
+  window.speechSynthesis?.cancel?.();
   speaking = false;
   browserSpeaking = false;
   currentVisemes = null;
@@ -1140,33 +1143,38 @@ function base64ToBlob(base64, type) {
 }
 
 async function playSegments(segments) {
+  stopCurrentSpeech();
+  playbackStopped = false;
+  const generation = speechGeneration;
+  const cancelled = () => playbackStopped || generation !== speechGeneration;
   const result = { played: 0, failed: 0 };
   for (const segment of segments) {
-    if (playbackStopped) break;
+    if (cancelled()) break;
 
     let played = false;
     if (segment.audio) {
       try {
         await initAudioContext();
+        if (cancelled()) break;
         if (!audioContext) throw new Error('Web Audio unavailable');
         const buffer = await audioContext.decodeAudioData(base64ToArrayBuffer(segment.audio));
+        if (cancelled()) break;
         speaking = true;
-        await playAudioWithVisemes(buffer, segment.visemeTimeline || []);
-        played = true;
+        played = (await playAudioWithVisemes(buffer, segment.visemeTimeline || [], generation)) !== false;
       } catch (error) {
         console.error('音频播放失败，尝试浏览器播报：', error);
       } finally {
-        if (!playbackStopped) {
+        if (!cancelled()) {
           speaking = false;
           currentVisemes = null;
           resetSpeechMouth();
         }
       }
     }
-    if (playbackStopped) break;
+    if (cancelled()) break;
 
-    if (!played && segment.text) played = await speakWithBrowser(segment.text);
-    if (playbackStopped) break;
+    if (!played && segment.text) played = await speakWithBrowser(segment.text, generation);
+    if (cancelled()) break;
 
     if (played) result.played += 1;
     else result.failed += 1;
@@ -1174,8 +1182,9 @@ async function playSegments(segments) {
   return result;
 }
 
-function playAudioWithVisemes(buffer, timeline) {
+function playAudioWithVisemes(buffer, timeline, generation = speechGeneration) {
   return new Promise((resolve, reject) => {
+    if (playbackStopped || generation !== speechGeneration) { resolve(false); return; }
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
     const analyser = audioContext.createAnalyser();
@@ -1193,41 +1202,57 @@ function playAudioWithVisemes(buffer, timeline) {
       samples: new Uint8Array(analyser.frequencyBinCount),
     };
     speechSourceRef = source;
-    source.onended = () => {
+    let settled = false;
+    const finish = (success, error) => {
+      if (settled) return;
+      settled = true;
       source.disconnect();
       analyser.disconnect();
       if (speechSourceRef === source) speechSourceRef = null;
-      currentVisemes = null;
-      resetSpeechMouth();
-      resolve();
+      if (cancelSpeechPlayback === cancel) cancelSpeechPlayback = null;
+      if (generation === speechGeneration) {
+        currentVisemes = null;
+        speaking = false;
+        resetSpeechMouth();
+      }
+      if (error) reject(error); else resolve(success);
     };
+    const cancel = () => finish(false);
+    cancelSpeechPlayback = cancel;
+    source.onended = () => finish(true);
     try {
       source.start();
     } catch (error) {
-      source.disconnect();
-      analyser.disconnect();
-      if (speechSourceRef === source) speechSourceRef = null;
-      currentVisemes = null;
-      reject(error);
+      finish(false, error);
     }
   });
 }
 
-function speakWithBrowser(text) {
+function speakWithBrowser(text, generation = speechGeneration) {
   return new Promise((resolve) => {
+    if (playbackStopped || generation !== speechGeneration) { resolve(false); return; }
     if (!('speechSynthesis' in window)) { resolve(false); return; }
+    let settled = false;
     const finish = (success) => {
-      if (playbackStopped) { resolve(false); return; }
-      speaking = false;
-      browserSpeaking = false;
-      resetSpeechMouth();
+      if (settled) return;
+      settled = true;
+      if (cancelSpeechPlayback === cancel) cancelSpeechPlayback = null;
+      if (generation === speechGeneration) {
+        speaking = false;
+        browserSpeaking = false;
+        resetSpeechMouth();
+      }
       resolve(success);
     };
+    const cancel = () => finish(false);
+    cancelSpeechPlayback = cancel;
     try {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'zh-CN';
       utterance.rate = 0.9;
-      utterance.onstart = () => { speaking = true; browserSpeaking = true; };
+      utterance.onstart = () => {
+        if (!settled && !playbackStopped && generation === speechGeneration) { speaking = true; browserSpeaking = true; }
+      };
       utterance.onend = () => finish(true);
       utterance.onerror = () => finish(false);
       window.speechSynthesis.speak(utterance);

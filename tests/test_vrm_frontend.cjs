@@ -126,6 +126,61 @@ test('all audio failures use browser speech and absence of both reports failure'
   assert.equal((await f.run(`playSegments([{text:'unavailable', audio:'AA=='}])`)).failed, 1);
 });
 
+test('sending consecutive messages restarts speech after stopping the previous reply', async () => {
+  const f=frontend(); const spoken=[];
+  f.sandbox.window.speechSynthesis={cancel(){},speak(u){spoken.push(u.text);u.onstart();u.onend();}};
+  f.sandbox.fetch=async()=>({ok:true,json:async()=>({reply:'新的回复',context:{},segments:[{text:'新的回复'}]})});
+  f.run('handleAction=()=>{};');
+  await f.run("sendMessage('你好')");
+  await f.run("sendMessage('再说一次')");
+  assert.deepEqual(spoken,['新的回复','新的回复']);
+  assert.equal(f.run('playbackStopped || speaking || browserSpeaking'),false);
+});
+
+test('cancelled browser speech settles without callbacks and late events cannot stop a new reply', async () => {
+  const f=frontend();const utterances=[];
+  f.sandbox.window.speechSynthesis={cancel(){},speak(u){utterances.push(u);u.onstart();}};
+  const old=f.run("playSegments([{text:'旧句'},{text:'不得播报'}])");
+  f.run('stopCurrentSpeech();');
+  const fresh=f.run("playSegments([{text:'新句'}])");
+  utterances[0].onend();utterances[0].onstart();
+  assert.equal(f.run('speaking && browserSpeaking'),true);
+  utterances[1].onend();
+  assert.equal((await old).played,0);
+  assert.equal((await fresh).played,1);
+  assert.deepEqual(utterances.map(u=>u.text),['旧句','新句']);
+});
+
+test('stale audio decoding cannot play or clear a replacement reply', async () => {
+  const f=frontend();let release;const utterances=[];
+  f.sandbox.decodePending=new Promise(resolve=>{release=resolve;});
+  f.sandbox.window.speechSynthesis={cancel(){},speak(u){utterances.push(u);u.onstart();}};
+  f.run("audioContext={state:'running',decodeAudioData(){return decodePending;}}; playAudioWithVisemes=()=>{throw Error('stale audio must not start');};");
+  const old=f.run("playSegments([{audio:'AQ==',text:'旧音频'}])");
+  await new Promise(resolve=>setImmediate(resolve));
+  f.run('stopCurrentSpeech();');
+  const fresh=f.run("playSegments([{text:'新回复'}])");
+  release({});await old;
+  assert.equal(f.run('speaking && browserSpeaking'),true);
+  assert.deepEqual(utterances.map(u=>u.text),['新回复']);
+  utterances[0].onend();await fresh;
+});
+
+test('stopped Web Audio settles and its late end event preserves newer visemes', async () => {
+  const f=frontend();const sources=[];
+  f.sandbox.makeSource=()=>{const s={connect(){},disconnect(){},start(){},stop(){}};sources.push(s);return s;};
+  f.run("audioContext={currentTime:0,destination:{},createBufferSource:makeSource,createAnalyser(){return {connect(){},disconnect(){},frequencyBinCount:128};}};");
+  const old=f.run('playAudioWithVisemes({},[])');
+  f.run('stopCurrentSpeech();playbackStopped=false;');
+  const fresh=f.run('playAudioWithVisemes({},[])');
+  const current=f.run('currentVisemes');
+  sources[0].onended();
+  assert.equal(f.run('currentVisemes'),current);
+  assert.equal(await old,false);
+  sources[1].onended();assert.equal(await fresh,true);
+  assert.equal(f.run('currentVisemes'),null);
+});
+
 test('browser speech errors resolve and clear the speaking state', async () => {
   const f = frontend();
   f.sandbox.window.speechSynthesis = { speak(u) { u.onstart(); u.onerror(); } };
