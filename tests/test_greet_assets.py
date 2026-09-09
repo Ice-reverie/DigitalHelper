@@ -97,7 +97,8 @@ class GreetAssetTests(unittest.TestCase):
         for name in ('aa','ih','ou','ee','oh'):
             self.assertTrue(all(v[0]==0 for v in self.channels[presets[name]['node'],'translation']))
         cloth=json.loads((ROOT/'greet_1.secondary.json').read_text())
-        self.assertEqual(len(cloth['tracks']),22)
+        self.assertEqual(len(cloth['tracks']),38)
+        self.assertEqual(sum('Twist' in t['nodeName'] for t in cloth['tracks']),16)
         for t in cloth['tracks']:
             self.assertEqual(t['values'][:4],[0,0,0,1])
             self.assertEqual(t['values'][-4:],[0,0,0,1])

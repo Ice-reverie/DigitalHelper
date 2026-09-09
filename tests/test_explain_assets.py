@@ -29,7 +29,8 @@ class ExplainAssetTests(unittest.TestCase):
             self.assertTrue(all(v[0]==0 for v in self.channels[presets[name]['node'],'translation']))
         data=json.loads((assets.ROOT/'explain_2.secondary.json').read_text())
         self.assertEqual((data['version'],data['fps'],data['duration']),(1,24,7))
-        self.assertEqual(len(data['tracks']),33)
+        self.assertEqual(len(data['tracks']),49)
+        self.assertEqual(sum('Twist' in t['nodeName'] for t in data['tracks']),16)
         for track in data['tracks']:
             values=track['values']
             self.assertEqual(len(values),169*4)

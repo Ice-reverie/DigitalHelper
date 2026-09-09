@@ -886,7 +886,7 @@ function validateGreetSecondary(data) {
   const samples = data.duration * data.fps + 1;
   const names = new Set();
   for (const t of data.tracks) {
-    if (typeof t.nodeName !== 'string' || !/^\d+\.joint_(?:\+AmiceB |\+HairS |___0_)/.test(t.nodeName) || names.has(t.nodeName) || !Array.isArray(t.values) || t.values.length !== samples*4 || !t.values.every(Number.isFinite)) throw new Error('Invalid cloth track');
+    if (typeof t.nodeName !== 'string' || !/^\d+\.joint_(?:\+AmiceB |\+HairS |___0_|(?:Left|Right)(?:Hand|Arm)Twist[123]?$)/.test(t.nodeName) || names.has(t.nodeName) || !Array.isArray(t.values) || t.values.length !== samples*4 || !t.values.every(Number.isFinite)) throw new Error('Invalid cloth track');
     names.add(t.nodeName);
     for (let i=0; i<t.values.length; i+=4) {
       if (Math.abs(Math.hypot(...t.values.slice(i,i+4))-1) > .001) throw new Error('Invalid cloth rotation');

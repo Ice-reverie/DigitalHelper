@@ -414,7 +414,7 @@ test('numbered body resources have independent caches', async () => {
 test('seven-second explain secondary tracks use their own timeline and return to neutral', () => {
   const f = frontend();
   f.sandbox.explainCloth = JSON.parse(fs.readFileSync(path.join(__dirname,'../models/animations/explain_2.secondary.json')));
-  assert.equal(f.run('validateGreetSecondary(explainCloth).tracks.length'), 33);
+  assert.equal(f.run('validateGreetSecondary(explainCloth).tracks.length'), 49);
   f.run(`defaultAvatar=true; sampleIndex=-1;
     q={clone(){return this},fromArray(a,i){sampleIndex=i;return this},slerp(){return this},multiply(){return this}};
     state={name:'explain',elapsed:7,secondary:[{values:explainCloth.tracks[0].values,fps:24,target:{quaternion:q},current:q,next:q}]};
@@ -573,9 +573,10 @@ test('greet cloth assets reject malformed data and non-clothing targets', () => 
   const f = frontend();
   const data = JSON.parse(fs.readFileSync(path.join(__dirname, '../models/animations/greet_1.secondary.json')));
   f.sandbox.clothData = data;
-  assert.equal(f.run('validateGreetSecondary(clothData).tracks.length'), 22);
+  assert.equal(f.run('validateGreetSecondary(clothData).tracks.length'), 38);
+  assert.equal(data.tracks.filter(t => /Twist/.test(t.nodeName)).length, 16);
   for (const mutate of [d => d.fps=30, d => d.tracks[0].values[0]=.5,
-    d => d.tracks[0].nodeName='15.joint_Head', d => d.tracks.push(d.tracks[0]),
+    d => d.tracks[0].nodeName='15.joint_Head', d => d.tracks[0].nodeName='25.joint_RightHandTwistInjected', d => d.tracks.push(d.tracks[0]),
     d => d.tracks[0].values[40]=NaN]) {
     const bad = structuredClone(data); mutate(bad); f.sandbox.clothData = bad;
     assert.throws(() => f.run('validateGreetSecondary(clothData)'));
