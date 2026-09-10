@@ -15,6 +15,10 @@ class AvatarSwitchingTests(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_and_all_models_are_served_without_directory_access(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url='http://test') as client:
             catalog = (await client.get('/api/avatars')).json()
+            self.assertEqual(catalog[0]['id'], 'AstraYao')
+            self.assertEqual(catalog[0]['profile'], 'standard')
+            default = await client.get('/api/avatar')
+            self.assertEqual(default.content, server.avatar_files()['AstraYao'].read_bytes())
             self.assertEqual({a['id'] for a in catalog}, set(server.avatar_files()))
             for avatar in catalog:
                 response = await client.get('/api/avatars/' + avatar['id'])
@@ -53,14 +57,14 @@ class AvatarSwitchingTests(unittest.IsolatedAsyncioTestCase):
             root.mkdir()
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url='http://test') as client:
                 self.assertEqual((await client.get('/api/avatars')).json(), [])
-                for filename in ['新人物 #1.VRM', 'Lumine_custom.vrm', 'Lumine_companion.vrm']:
+                for filename in ['新人物 #1.VRM', 'Lumine_custom.vrm', 'AstraYao.vrm']:
                     (root/filename).write_bytes(b'glTF-test')
                 (root/'notes.txt').write_text('private')
                 (root/'nested.vrm').mkdir()
                 (root/'nested.vrm'/'hidden.vrm').write_bytes(b'glTF')
                 catalog = (await client.get('/api/avatars')).json()
-                self.assertEqual(catalog[0]['id'], 'Lumine_companion')
-                self.assertEqual({a['id'] for a in catalog}, {'新人物 #1','Lumine_custom','Lumine_companion'})
+                self.assertEqual(catalog[0]['id'], 'AstraYao')
+                self.assertEqual({a['id'] for a in catalog}, {'新人物 #1','Lumine_custom','AstraYao'})
                 self.assertEqual(next(a['profile'] for a in catalog if a['id']=='Lumine_custom'), 'standard')
                 response = await client.get('/api/avatars/'+quote('新人物 #1', safe=''))
                 self.assertEqual(response.content, b'glTF-test')

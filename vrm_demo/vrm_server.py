@@ -44,12 +44,13 @@ app = FastAPI(title="安心健康助手")
 mimetypes.add_type("text/javascript", ".js")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+DEFAULT_AVATAR = "AstraYao"
 
 
 @app.get("/api/avatar")
 async def default_avatar():
-    path = os.path.join(BASE_DIR, "..", "models", "characters", "Lumine_companion.vrm")
-    if not os.path.isfile(path):
+    path = avatar_files().get(DEFAULT_AVATAR)
+    if path is None:
         raise HTTPException(status_code=404, detail="Default avatar not found")
     return FileResponse(path, media_type="model/gltf-binary")
 
@@ -66,12 +67,12 @@ def avatar_files():
     except FileNotFoundError:
         return {}
     return {p.stem: p for p in sorted(files, key=lambda p: (
-        p.stem != "Lumine_companion", p.stem.casefold(), p.name))}
+        p.stem != DEFAULT_AVATAR, p.stem.casefold(), p.name))}
 
 
 @app.get("/api/avatars")
 async def avatar_catalog():
-    return [{"id": name, "label": "Lumine（默认适配版）" if name == "Lumine_companion" else name,
+    return [{"id": name, "label": "AstraYao（默认）" if name == DEFAULT_AVATAR else "Lumine（适配版）" if name == "Lumine_companion" else name,
              "profile": "lumine" if name in {"Lumine_companion", "Lumine"} else "standard"}
             for name in avatar_files()]
 

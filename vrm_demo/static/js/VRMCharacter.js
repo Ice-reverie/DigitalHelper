@@ -41,8 +41,10 @@ let modelLoadId = 0;
 let idleAnimation = null;
 let defaultAvatar = false;
 let avatarLoading = false;
-let currentAvatarName = 'Lumine（默认适配版）';
-let currentAvatarId = 'Lumine_companion';
+const DEFAULT_AVATAR = {id:'AstraYao', label:'AstraYao（默认）', profile:'standard'};
+const DEFAULT_AVATAR_STORAGE_KEY = 'anxin.defaultAvatar';
+let currentAvatarName = DEFAULT_AVATAR.label;
+let currentAvatarId = DEFAULT_AVATAR.id;
 let availableAvatars = [];
 let avatarCatalogRequest = 0;
 let avatarGltf = null;
@@ -95,8 +97,7 @@ initSpeechRecognition();
 checkService();
 addMessage('您好，我是小安。点一下「开始说话」，告诉我哪里不舒服，或需要什么帮助。我会陪您一步步完成。', false);
 renderQuickReplies();
-if (renderer) loadVrm('/api/avatar', '小安的默认形象');
-loadAvatarCatalog();
+initializeDefaultAvatar();
 
 function initThree() {
   try {
@@ -195,6 +196,11 @@ function fitAvatar() {
 }
 
 function bindUI() {
+  document.getElementById('set-default-avatar-btn').addEventListener('click', () => {
+    const selected = availableAvatars.find(v => v.id === document.getElementById('avatar-select').value);
+    if (selected) saveDefaultAvatar(selected.id);
+  });
+  document.getElementById('reset-default-avatar-btn').addEventListener('click', () => saveDefaultAvatar(null));
   document.getElementById('switch-avatar-btn').addEventListener('click', () => {
     const selected = availableAvatars.find(avatar => avatar.id === document.getElementById('avatar-select').value);
     if (selected) loadVrm(`/api/avatars/${encodeURIComponent(selected.id)}`, selected.label, () => {}, selected);
@@ -466,6 +472,41 @@ function loadVrmFromFile(file) {
   loadVrm(url, file.name, () => URL.revokeObjectURL(url));
 }
 
+function savedDefaultAvatar() {
+  try { return window.localStorage?.getItem(DEFAULT_AVATAR_STORAGE_KEY) || null; }
+  catch { return null; }
+}
+
+function showDefaultAvatarPreference() {
+  const saved = savedDefaultAvatar();
+  const avatar = availableAvatars.find(v => v.id === saved);
+  document.getElementById('default-avatar-status').textContent = saved
+    ? avatar ? `本浏览器默认形象：${avatar.id}。下次打开或刷新页面生效。`
+      : '保存的默认人物暂不可用，下次打开将使用 AstraYao。'
+    : '本浏览器默认形象：AstraYao（系统默认）。';
+}
+
+function saveDefaultAvatar(id) {
+  try {
+    if (!window.localStorage) throw new Error('Storage unavailable');
+    if (id) window.localStorage.setItem(DEFAULT_AVATAR_STORAGE_KEY, id);
+    else window.localStorage.removeItem(DEFAULT_AVATAR_STORAGE_KEY);
+    showDefaultAvatarPreference();
+  } catch {
+    document.getElementById('default-avatar-status').textContent = '浏览器未能保存设置，请允许本地存储后重试。';
+  }
+}
+
+async function initializeDefaultAvatar() {
+  const saved = savedDefaultAvatar();
+  // Read the catalog before loading a saved selection, so profiles come from
+  // the server and removed files fall back to the hard-coded system default.
+  if (saved) await loadAvatarCatalog();
+  const selected = availableAvatars.find(v => v.id === saved) || DEFAULT_AVATAR;
+  if (renderer) loadVrm(selected.id === DEFAULT_AVATAR.id ? '/api/avatar' : `/api/avatars/${encodeURIComponent(selected.id)}`, selected.label, () => {}, selected);
+  if (!saved) await loadAvatarCatalog();
+}
+
 async function loadAvatarCatalog() {
   const request = ++avatarCatalogRequest;
   const select = document.getElementById('avatar-select');
@@ -489,8 +530,10 @@ async function loadAvatarCatalog() {
     select.value = data.some(v => v.id === selectedId) ? selectedId : data.some(v => v.id === currentAvatarId) ? currentAvatarId : data[0]?.id || '';
     select.disabled = !data.length;
     button.disabled = !data.length;
+    document.getElementById('set-default-avatar-btn').disabled = !data.length;
     button.textContent = '切换形象';
     status.textContent = data.length ? `可选择 ${data.length} 个形象，切换后自动恢复全身视角。` : '暂未找到人物模型，当前形象仍可使用。';
+    showDefaultAvatarPreference();
   } catch {
     if (request !== avatarCatalogRequest) return;
     button.disabled = false;
@@ -531,7 +574,7 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
   }
   const loadId = ++modelLoadId;
   avatarLoading = true;
-  const profile = avatar?.profile || (url === '/api/avatar' ? 'lumine' : 'standard');
+  const profile = avatar?.profile || (url === '/api/avatar' ? DEFAULT_AVATAR.profile : 'standard');
   secondaryCache.clear();
   lastVariant.clear();
   actionRequestId += 1;
@@ -574,7 +617,7 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
       currentVrm = vrm;
       currentAvatarName = name;
-      currentAvatarId = avatar?.id || (url === '/api/avatar' ? 'Lumine_companion' : '');
+      currentAvatarId = avatar?.id || (url === '/api/avatar' ? DEFAULT_AVATAR.id : '');
       document.getElementById('avatar-select').value = currentAvatarId;
       avatarLoading = false;
       resetSpeechMouth();

@@ -729,3 +729,37 @@ test('older avatar catalog results cannot overwrite a fresh directory scan', asy
   await pending;
   assert.equal(f.run('availableAvatars[0].id'),'new');
 });
+
+test('presenter default selection persists independently of the current avatar and can reset', () => {
+  const f=frontend(), saved=new Map();
+  f.sandbox.window.localStorage={getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)};
+  f.run("availableAvatars=[{id:'Klee',label:'Klee',profile:'standard'}]");
+  f.elements.get('avatar-select').value='Klee';
+  f.elements.get('set-default-avatar-btn').handlers.click();
+  assert.equal(f.run('savedDefaultAvatar()'),'Klee');
+  assert.equal(f.run('currentAvatarId'),'AstraYao');
+  f.elements.get('reset-default-avatar-btn').handlers.click();
+  assert.equal(f.run('savedDefaultAvatar()'),null);
+  f.sandbox.window.localStorage.setItem=()=>{throw new Error('denied')};
+  f.elements.get('set-default-avatar-btn').handlers.click();
+  assert.match(f.elements.get('default-avatar-status').textContent,/未能保存/);
+});
+
+test('startup resolves saved defaults through the catalog and falls back to AstraYao', async () => {
+  for(const saved of ['Klee','removed','../unsafe',null]) {
+    const f=frontend();
+    f.sandbox.window.localStorage={getItem:()=>saved};
+    f.sandbox.fetch=async()=>({ok:true,json:async()=>[{id:'Klee',label:'Klee',profile:'standard'}]});
+    f.run('renderer={}; loadVrm=(...args)=>defaultLoad=args');
+    await f.run('initializeDefaultAvatar()');
+    assert.equal(f.run('defaultLoad[0]'),saved==='Klee'?'/api/avatars/Klee':'/api/avatar');
+    assert.equal(f.run('defaultLoad[3].profile'),'standard');
+    assert.equal(f.run('defaultLoad[3].id'),saved==='Klee'?'Klee':'AstraYao');
+  }
+  const f=frontend();
+  f.sandbox.window.localStorage={getItem:()=> 'Klee'};
+  f.sandbox.fetch=async()=>{throw new Error('offline')};
+  f.run('renderer={}; loadVrm=(...args)=>defaultLoad=args');
+  await f.run('initializeDefaultAvatar()');
+  assert.equal(f.run('defaultLoad[3].id'),'AstraYao');
+});
