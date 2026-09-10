@@ -28,9 +28,10 @@ class AvatarSwitchingTests(unittest.IsolatedAsyncioTestCase):
                 await server.named_avatar('Klee')
 
     def test_all_current_models_have_humanoid_eyes_and_valid_expression_targets(self):
-        root = Path(server.BASE_DIR).parent/'models'/'characters'
-        for name in ("Lumine_companion", "Lumine", "Anaxa", "Ashveil", "Klee", "Lohen", "Odette", "Ratio"):
-            data = (root/(name+'.vrm')).read_bytes()
+        files = server.avatar_files()
+        self.assertTrue(files, 'Expected repository avatar assets')
+        for name, path in files.items():
+            data = path.read_bytes()
             gltf = json.loads(data[20:20+struct.unpack_from('<I',data,12)[0]])
             vrm = gltf['extensions']['VRM']
             bones = {b['bone'] for b in vrm['humanoid']['humanBones']}
