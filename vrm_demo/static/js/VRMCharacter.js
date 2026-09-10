@@ -44,6 +44,7 @@ let avatarLoading = false;
 let currentAvatarName = 'Lumine（默认适配版）';
 let currentAvatarId = 'Lumine_companion';
 let availableAvatars = [];
+let avatarCatalogRequest = 0;
 let avatarGltf = null;
 const secondaryCache = new Map();
 let greetApplied = [];
@@ -212,7 +213,10 @@ function bindUI() {
   for (const name of ['history', 'help']) {
     const panel = document.getElementById(name + '-dialog');
     const trigger = document.getElementById(name + '-btn');
-    trigger.addEventListener('click', () => panel.showModal());
+    trigger.addEventListener('click', () => {
+      panel.showModal();
+      if (name === 'help') loadAvatarCatalog();
+    });
     document.getElementById('close-' + name + '-btn').addEventListener('click', () => panel.close());
     panel.addEventListener('close', () => trigger.focus());
   }
@@ -463,14 +467,17 @@ function loadVrmFromFile(file) {
 }
 
 async function loadAvatarCatalog() {
+  const request = ++avatarCatalogRequest;
   const select = document.getElementById('avatar-select');
   const button = document.getElementById('switch-avatar-btn');
   const status = document.getElementById('avatar-catalog-status');
   try {
-    const response = await fetch('/api/avatars');
+    const response = await fetch('/api/avatars', {cache:'no-store'});
     if (!response.ok) throw new Error('Avatar catalog unavailable');
     const data = await response.json();
-    if (!Array.isArray(data) || !data.length || data.some(v => !/^[A-Za-z0-9_]+$/.test(v.id) || typeof v.label !== 'string' || !['lumine','standard'].includes(v.profile))) throw new Error('Invalid avatar catalog');
+    if (request !== avatarCatalogRequest) return;
+    if (!Array.isArray(data) || data.some(v => !v || typeof v.id !== 'string' || !v.id || /[/\\\u0000-\u001f]/.test(v.id) || ['.','..'].includes(v.id) || typeof v.label !== 'string' || !['lumine','standard'].includes(v.profile))) throw new Error('Invalid avatar catalog');
+    const selectedId = select.value;
     availableAvatars = data;
     select.replaceChildren();
     for (const avatar of data) {
@@ -479,12 +486,13 @@ async function loadAvatarCatalog() {
       option.textContent = avatar.label;
       select.appendChild(option);
     }
-    select.value = currentAvatarId;
-    select.disabled = false;
-    button.disabled = false;
+    select.value = data.some(v => v.id === selectedId) ? selectedId : data.some(v => v.id === currentAvatarId) ? currentAvatarId : data[0]?.id || '';
+    select.disabled = !data.length;
+    button.disabled = !data.length;
     button.textContent = '切换形象';
-    status.textContent = `可选择 ${data.length} 个形象，切换后自动恢复全身视角。`;
+    status.textContent = data.length ? `可选择 ${data.length} 个形象，切换后自动恢复全身视角。` : '暂未找到人物模型，当前形象仍可使用。';
   } catch {
+    if (request !== avatarCatalogRequest) return;
     button.disabled = false;
     button.textContent = '重试人物列表';
     status.textContent = '人物列表暂不可用，当前形象仍可使用，也可以载入本地文件。';

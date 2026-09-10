@@ -8,6 +8,7 @@ import re
 import subprocess
 import tempfile
 import wave
+from pathlib import Path
 from typing import Dict, List
 
 import uvicorn
@@ -53,24 +54,33 @@ async def default_avatar():
     return FileResponse(path, media_type="model/gltf-binary")
 
 
-AVATAR_NAMES = ("Lumine_companion", "Lumine", "Anaxa", "Ashveil", "Klee", "Lohen", "Odette", "Ratio")
+CHARACTERS_DIR = Path(BASE_DIR).parent / "models" / "characters"
+
+
+def avatar_files():
+    """Discover direct VRM children without exposing directories or linked files."""
+    try:
+        files = [p for p in CHARACTERS_DIR.iterdir()
+                 if p.suffix.lower() == ".vrm" and p.stem and not p.is_symlink()
+                 and p.is_file() and p.resolve().parent == CHARACTERS_DIR.resolve()]
+    except FileNotFoundError:
+        return {}
+    return {p.stem: p for p in sorted(files, key=lambda p: (
+        p.stem != "Lumine_companion", p.stem.casefold(), p.name))}
 
 
 @app.get("/api/avatars")
 async def avatar_catalog():
     return [{"id": name, "label": "Lumine（默认适配版）" if name == "Lumine_companion" else name,
-             "profile": "lumine" if name.startswith("Lumine") else "standard"}
-            for name in AVATAR_NAMES
-            if os.path.isfile(os.path.join(BASE_DIR, "..", "models", "characters", name + ".vrm"))]
+             "profile": "lumine" if name in {"Lumine_companion", "Lumine"} else "standard"}
+            for name in avatar_files()]
 
 
 @app.get("/api/avatars/{name}")
 async def named_avatar(name: str):
-    if name not in AVATAR_NAMES:
+    path = avatar_files().get(name)
+    if path is None:
         raise HTTPException(status_code=404, detail="Unknown avatar")
-    path = os.path.join(BASE_DIR, "..", "models", "characters", name + ".vrm")
-    if not os.path.isfile(path):
-        raise HTTPException(status_code=404, detail="Avatar file not found")
     return FileResponse(path, media_type="model/gltf-binary")
 
 
