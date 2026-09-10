@@ -13,7 +13,6 @@ const elements = {
   systemState: document.getElementById('system-state-text'),
   fileInput: document.getElementById('vrm-file'),
   loadButton: document.getElementById('load-btn'),
-  waveButton: document.getElementById('wave-btn'),
   animationButton: document.getElementById('anim-btn'),
   animationInput: document.getElementById('vrm-anim-file'),
   messages: document.getElementById('messages'),
@@ -69,7 +68,6 @@ let idleHands = [];
 let handIdleTime = 0;
 let mixer = null;
 let activeAction = null;
-let waveState = null;
 let conversationContext = {};
 let conversationHistory = [];
 const MAX_HISTORY = 10;
@@ -83,7 +81,6 @@ let speechGeneration = 0;
 let cancelSpeechPlayback = null;
 const VOWELS = ['aa', 'ih', 'ou', 'ee', 'oh'];
 const mouthWeights = Object.fromEntries(VOWELS.map(name => [name, 0]));
-const WAVE_DURATION = 2600;
 
 let recognition = null;
 let listening = false;
@@ -244,14 +241,6 @@ function bindUI() {
   elements.fileInput.addEventListener('change', (event) => {
     const [file] = event.target.files;
     if (file) loadVrmFromFile(file);
-  });
-
-  elements.waveButton.addEventListener('click', () => {
-    if (!currentVrm) {
-      setModelStatus('动作“挥手”已识别', '载入 3D 模型后即可看到动作效果');
-      return;
-    }
-    startWave();
   });
 
   elements.animationButton.addEventListener('click', () => elements.animationInput.click());
@@ -687,7 +676,6 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       mixer = null;
       activeAction = null;
       scene.add(vrm.scene);
-      waveState = null;
       modelPose = preparedPose;
       idleHands = preparedHands;
       handIdleTime = 0;
@@ -1119,7 +1107,6 @@ function stopSceneAnimation() {
 function playVrmAnimation(animation, loopMode, name = 'preview') {
   const from = new Map(modelPose.map(p => [p.name, { rotation:p.node.quaternion.clone(), position:p.node.position.clone() }]));
   stopSceneAnimation();
-  waveState = null;
   const greetSmile = name === 'greet' ? createGreetSmile(currentVrm) : null;
   try {
   const filtered = filteredSceneAnimation(animation, name, currentVrm);
@@ -1209,10 +1196,6 @@ function updateSceneAnimation(delta) {
     nextBlinkAt = performance.now() + 2200;
     setModelStatus('自然待机', '可以继续和我说话');
   }
-}
-
-function startWave() {
-  if (!waveState) waveState = { start: performance.now() };
 }
 
 async function initAudioContext() {
@@ -1472,7 +1455,6 @@ function updateAvatar(delta) {
       head.rotation.y = motionReduced ? 0 : Math.sin(now * 0.0006) * 0.06;
       head.rotation.x = speaking && !motionReduced ? Math.sin(now * 0.01) * 0.03 : 0;
     }
-    updateWave(now);
   }
 
   updateVrmWithSpeechPriority(delta);
@@ -1496,26 +1478,4 @@ function updateBlink(now) {
     blinking = true;
     blinkStart = now;
   }
-}
-
-function updateWave(now) {
-  const upperArm = getBone('rightUpperArm');
-  const lowerArm = getBone('rightLowerArm');
-  const hand = getBone('rightHand');
-  if (!waveState) return;
-
-  const progress = (now - waveState.start) / WAVE_DURATION;
-  if (progress >= 1) {
-    waveState = null;
-    if (upperArm) upperArm.rotation.z = -1.15;
-    if (lowerArm) lowerArm.rotation.x = 0;
-    if (hand) hand.rotation.x = 0;
-    return;
-  }
-
-  const raise = Math.min(1, progress / 0.3);
-  const ease = raise * raise * (3 - 2 * raise);
-  if (upperArm) upperArm.rotation.z = -1.15 + 1.7 * ease;
-  if (lowerArm) lowerArm.rotation.x = 0.55 * ease;
-  if (hand && progress > 0.3) hand.rotation.x = Math.sin(now * 0.02) * 0.4;
 }
