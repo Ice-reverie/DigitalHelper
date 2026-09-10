@@ -196,6 +196,14 @@ function fitAvatar() {
 }
 
 function bindUI() {
+  document.getElementById('avatar-voice-select').addEventListener('change', () => {
+    stopCurrentSpeech();
+    try {
+      window.localStorage.setItem('anxin.voice.' + currentAvatarId, document.getElementById('avatar-voice-select').value);
+      document.getElementById('avatar-voice-status').textContent = '声音设置已保存，下次说话生效。';
+    } catch { document.getElementById('avatar-voice-status').textContent = '未能保存声音设置，请允许浏览器本地存储。'; }
+  });
+  document.getElementById('preview-voice-btn').addEventListener('click', previewAvatarVoice);
   document.getElementById('set-default-avatar-btn').addEventListener('click', () => {
     const selected = availableAvatars.find(v => v.id === document.getElementById('avatar-select').value);
     if (selected) saveDefaultAvatar(selected.id);
@@ -400,6 +408,8 @@ async function sendMessage(providedText = '', startNewService = false) {
   if (!text || elements.sendButton.disabled) return;
 
   stopCurrentSpeech();
+  const requestGeneration = speechGeneration;
+  const voice = avatarVoice();
 
   conversationHistory.push({ role: 'user', content: text });
   if (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
@@ -417,7 +427,7 @@ async function sendMessage(providedText = '', startNewService = false) {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, context: startNewService ? {} : conversationContext, history: conversationHistory }),
+      body: JSON.stringify({ text, ...voice, context: startNewService ? {} : conversationContext, history: conversationHistory }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -429,10 +439,14 @@ async function sendMessage(providedText = '', startNewService = false) {
     const note = data.tts_available ? '' : '当前使用浏览器语音播报';
     addMessage(replyText, false, note);
     renderQuickReplies(data.quick_replies || []);
+    if (requestGeneration !== speechGeneration) {
+      setInteractionStatus('已为您回复，请查看文字。');
+      return;
+    }
     handleAction(data.action);
 
     setInteractionStatus('正在为您朗读，请稍候……');
-    const playback = await playSegments(data.segments?.length ? data.segments : [{ text: replyText }]);
+    const playback = await playSegments(data.segments?.length ? data.segments : [{ text: replyText }], data.voice_gender || voice.voice_gender);
     setInteractionStatus(
       playback.failed ? '部分语音暂时无法播放，请查看下方文字回复。'
         : data.context?.flow ? '请按下方提示，选择下一步。' : '已为您回复，还需要什么帮助？',
@@ -472,6 +486,46 @@ function loadVrmFromFile(file) {
   loadVrm(url, file.name, () => URL.revokeObjectURL(url));
 }
 
+function voicePreference(id = currentAvatarId) {
+  try {
+    const value = window.localStorage?.getItem('anxin.voice.' + id);
+    return ['male','female'].includes(value) ? value : 'auto';
+  } catch { return 'auto'; }
+}
+
+function avatarVoice() {
+  const selected = document.getElementById('avatar-voice-select').value;
+  const preference = ['male','female','auto'].includes(selected) ? selected : voicePreference();
+  const preset = availableAvatars.find(v => v.id === currentAvatarId)?.voice_gender || 'female';
+  return {avatar_id:currentAvatarId || null, voice_gender:preference === 'auto' ? preset : preference};
+}
+
+function refreshAvatarVoice() {
+  document.getElementById('avatar-voice-select').value = voicePreference();
+  document.getElementById('avatar-voice-status').textContent = `当前人物 ${currentAvatarName}，${avatarVoice().voice_gender === 'male' ? '男声' : '女声'}。设置按人物保存在本浏览器。`;
+}
+
+async function previewAvatarVoice() {
+  stopCurrentSpeech();
+  const generation = speechGeneration, voice = avatarVoice();
+  const status = document.getElementById('avatar-voice-status');
+  status.textContent = '正在准备试听……';
+  initAudioContext().catch(() => {});
+  try {
+    const response = await fetch('/api/tts', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:'您好，我会陪您慢慢说，有需要随时告诉我。', ...voice})});
+    if (!response.ok) throw new Error('Speech unavailable');
+    const data = await response.json();
+    if (generation !== speechGeneration) return;
+    const playback = playSegments(data.segments, data.voice_gender || voice.voice_gender);
+    const playbackGeneration = speechGeneration;
+    const result = await playback;
+    if (playbackGeneration === speechGeneration) status.textContent = result.failed ? '试听暂不可用，请稍后重试。' : '试听完成。';
+  } catch {
+    if (generation === speechGeneration) status.textContent = '试听服务暂不可用，请稍后重试。';
+  }
+}
+
 function savedDefaultAvatar() {
   try { return window.localStorage?.getItem(DEFAULT_AVATAR_STORAGE_KEY) || null; }
   catch { return null; }
@@ -492,6 +546,7 @@ function saveDefaultAvatar(id) {
     if (id) window.localStorage.setItem(DEFAULT_AVATAR_STORAGE_KEY, id);
     else window.localStorage.removeItem(DEFAULT_AVATAR_STORAGE_KEY);
     showDefaultAvatarPreference();
+    refreshAvatarVoice();
   } catch {
     document.getElementById('default-avatar-status').textContent = '浏览器未能保存设置，请允许本地存储后重试。';
   }
@@ -534,6 +589,7 @@ async function loadAvatarCatalog() {
     button.textContent = '切换形象';
     status.textContent = data.length ? `可选择 ${data.length} 个形象，切换后自动恢复全身视角。` : '暂未找到人物模型，当前形象仍可使用。';
     showDefaultAvatarPreference();
+    refreshAvatarVoice();
   } catch {
     if (request !== avatarCatalogRequest) return;
     button.disabled = false;
@@ -567,6 +623,7 @@ async function adaptAvatar(vrm, gltf, profile) {
 }
 
 function loadVrm(url, name, release = () => {}, avatar = null) {
+  stopCurrentSpeech();
   if (!renderer) {
     release();
     setModelStatus('无法加载 3D 模型', '当前设备未启用 WebGL，其他功能仍可使用');
@@ -615,9 +672,12 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       const preparedHands = prepareIdleHands(vrm);
       stopSceneAnimation();
       if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
+      // Also cancel speech started while this model was still downloading.
+      stopCurrentSpeech();
       currentVrm = vrm;
       currentAvatarName = name;
       currentAvatarId = avatar?.id || (url === '/api/avatar' ? DEFAULT_AVATAR.id : '');
+      refreshAvatarVoice();
       document.getElementById('avatar-select').value = currentAvatarId;
       avatarLoading = false;
       resetSpeechMouth();
@@ -1193,7 +1253,7 @@ function base64ToBlob(base64, type) {
   return new Blob([bytes], { type });
 }
 
-async function playSegments(segments) {
+async function playSegments(segments, gender = 'female') {
   stopCurrentSpeech();
   playbackStopped = false;
   const generation = speechGeneration;
@@ -1224,7 +1284,7 @@ async function playSegments(segments) {
     }
     if (cancelled()) break;
 
-    if (!played && segment.text) played = await speakWithBrowser(segment.text, generation);
+    if (!played && segment.text) played = await speakWithBrowser(segment.text, generation, gender);
     if (cancelled()) break;
 
     if (played) result.played += 1;
@@ -1279,7 +1339,7 @@ function playAudioWithVisemes(buffer, timeline, generation = speechGeneration) {
   });
 }
 
-function speakWithBrowser(text, generation = speechGeneration) {
+function speakWithBrowser(text, generation = speechGeneration, gender = 'female') {
   return new Promise((resolve) => {
     if (playbackStopped || generation !== speechGeneration) { resolve(false); return; }
     if (!('speechSynthesis' in window)) { resolve(false); return; }
@@ -1301,6 +1361,10 @@ function speakWithBrowser(text, generation = speechGeneration) {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'zh-CN';
       utterance.rate = 0.9;
+      const voices = (window.speechSynthesis.getVoices?.() || []).filter(v => /^zh/i.test(v.lang));
+      const names = gender === 'male' ? /yunxi|yunjian|yunyang|kangkang|david|zhiwei/i : /xiaoxiao|xiaoyi|huihui|yaoyao|tingting|lili|hanhan/i;
+      const voice = voices.find(v => names.test(v.name)) || voices.find(v => v.default) || voices[0];
+      if (voice) utterance.voice = voice;
       utterance.onstart = () => {
         if (!settled && !playbackStopped && generation === speechGeneration) { speaking = true; browserSpeaking = true; }
       };

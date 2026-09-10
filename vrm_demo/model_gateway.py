@@ -60,8 +60,8 @@ def configuration():
         )
         # Remote credentials must travel over TLS; HTTP is useful for local models.
         valid = valid and (url.scheme == "https" or url.hostname in ("localhost", "127.0.0.1", "::1"))
-        if key and model and valid and protocol == "openai-compatible" and httpx is not None:
-            return {"key": key, "base": base, "model": model}
+        if key and model and valid and protocol in ("openai-compatible", "anthropic") and httpx is not None:
+            return {"key": key, "base": base, "model": model, "protocol": protocol}
     except ValueError:
         pass
     return None
@@ -80,13 +80,19 @@ async def request_completion(config, text, history=None):
     if history:
         messages.extend(history[-10:])
     messages.append({"role": "user", "content": text})
+    anthropic = config.get("protocol") == "anthropic"
+    endpoint = "/messages" if anthropic else "/chat/completions"
+    headers = {"x-api-key": config["key"], "anthropic-version": "2023-06-01"} if anthropic else {"Authorization": "Bearer " + config["key"]}
+    payload = {"model": config["model"], "messages": messages[1:] if anthropic else messages,
+               "stream": False, "max_tokens": 500}
+    if anthropic:
+        payload["system"] = SYSTEM_PROMPT
+    else:
+        payload["response_format"] = {"type": "json_object"}
     async with httpx.AsyncClient(timeout=MODEL_TIMEOUT, follow_redirects=False) as client:
         async with client.stream(
-            "POST", config["base"] + "/chat/completions",
-            headers={"Authorization": "Bearer " + config["key"]},
-            json={"model": config["model"], "messages": messages,
-                  "stream": False, "max_tokens": 500,
-                  "response_format": {"type": "json_object"}},
+            "POST", config["base"] + endpoint,
+            headers=headers, json=payload,
         ) as response:
             response.raise_for_status()
             body = bytearray()
@@ -94,6 +100,12 @@ async def request_completion(config, text, history=None):
                 body.extend(chunk)
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise ValueError("Oversized model response")
+    if anthropic:
+        result = json.loads(body)
+        if result.get("stop_reason") != "end_turn":
+            raise ValueError("Incomplete model response")
+        content = "".join(block["text"] for block in result["content"] if block.get("type") == "text")
+        return json.loads(content)
     choice = json.loads(body)["choices"][0]
     if choice.get("finish_reason") != "stop":
         raise ValueError("Incomplete model response")

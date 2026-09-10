@@ -65,15 +65,15 @@ class DemoConversationTests(unittest.TestCase):
 
 
 class SpeechPipelineTests(unittest.IsolatedAsyncioTestCase):
-    async def test_synthesis_runs_concurrently_but_returns_sentence_order(self):
+    async def test_synthesis_runs_sequentially_and_returns_sentence_order(self):
         started = []
         all_started = asyncio.Event()
 
-        async def synthesize(text):
+        async def synthesize(text, gender):
             started.append(text)
             if len(started) == 2:
                 all_started.set()
-            await asyncio.wait_for(all_started.wait(), 1)
+            await asyncio.sleep(0)
             return text.encode()
 
         with patch.object(server, "split_sentence", return_value=["first", "second"]), \
@@ -85,7 +85,7 @@ class SpeechPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["tts_available"])
 
     async def test_timeout_keeps_text_and_reports_no_online_audio(self):
-        async def stalled(text):
+        async def stalled(text, gender):
             await asyncio.Event().wait()
 
         with patch.object(server, "tts_to_mp3", side_effect=stalled), \

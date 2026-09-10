@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import wave
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -19,8 +19,10 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 if __package__:
+    from . import tts_gateway
     from .model_gateway import reply_with_model, configuration as model_configuration
 else:
+    import tts_gateway
     from model_gateway import reply_with_model, configuration as model_configuration
 
 try:
@@ -73,6 +75,7 @@ def avatar_files():
 @app.get("/api/avatars")
 async def avatar_catalog():
     return [{"id": name, "label": "AstraYao（默认）" if name == DEFAULT_AVATAR else "Lumine（适配版）" if name == "Lumine_companion" else name,
+             "voice_gender": tts_gateway.voice_gender(name),
              "profile": "lumine" if name in {"Lumine_companion", "Lumine"} else "standard"}
             for name in avatar_files()]
 
@@ -270,8 +273,13 @@ def analyze_audio(audio):
         return build_viseme_timeline(rhubarb_analyze(wav_path))
 
 
-class ChatRequest(BaseModel):
+class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
+    avatar_id: str | None = Field(default=None, max_length=255)
+    voice_gender: Literal["auto", "male", "female"] = "auto"
+
+
+class ChatRequest(TTSRequest):
     context: Dict[str, str] = Field(default_factory=dict)
     history: List[Dict[str, str]] = Field(default_factory=list)
 
@@ -448,15 +456,8 @@ def llm_reply(text: str) -> str:
     return build_reply(text)["reply"]
 
 
-async def tts_to_mp3(text: str) -> bytes:
-    if edge_tts is None:
-        return b""
-    communicate = edge_tts.Communicate(text, TTS_VOICE, rate="+15%")
-    buffer = io.BytesIO()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            buffer.write(chunk["data"])
-    return buffer.getvalue()
+async def tts_to_mp3(text: str, gender: str = "female") -> bytes:
+    return await tts_gateway.synthesize(text, gender, TTS_TIMEOUT_SECONDS)
 
 
 @app.get("/")
@@ -466,7 +467,8 @@ async def index():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "tts_available": edge_tts is not None,
+    return {"status": "ok", "tts_available": tts_gateway.edge_tts is not None or tts_gateway.configuration() is not None,
+            **tts_gateway.status(),
             "llm_configured": model_configuration() is not None}
 
 
@@ -477,15 +479,12 @@ async def _warmup_tts():
             await asyncio.wait_for(tts_to_mp3("您好"), timeout=20)
             print("[warmup] edge_tts ready", flush=True)
         except Exception as error:
-            print("[warmup] edge_tts failed:", error, flush=True)
+            print("[warmup] speech unavailable", flush=True)
 
 
 
-@app.post("/api/chat")
-async def chat(req: ChatRequest):
-    result = build_reply(req.text, req.context)
-    result = await reply_with_model(req.text, req.context, result, req.history)
-    sentences = split_sentence(result["reply"])
+async def speech_segments(text: str, gender: str):
+    sentences = split_sentence(text)
 
     # edge_tts cannot run in parallel (WebSocket contention), so synthesize
     # sequentially but kick off Rhubarb analysis in a worker thread so the
@@ -498,9 +497,9 @@ async def chat(req: ChatRequest):
             analyze_task = None
         audio = b""
         try:
-            audio = await asyncio.wait_for(tts_to_mp3(sentence), timeout=TTS_TIMEOUT_SECONDS)
+            audio = await asyncio.wait_for(tts_to_mp3(sentence, gender), timeout=2*TTS_TIMEOUT_SECONDS)
         except Exception as error:
-            print("tts error:", error)
+            print("Speech synthesis unavailable")
         audio_base64 = base64.b64encode(audio).decode("utf-8") if audio else ""
         seg = {
             "text": sentence,
@@ -514,15 +513,29 @@ async def chat(req: ChatRequest):
                 try:
                     s["visemeTimeline"] = await run_in_threadpool(analyze_audio, a)
                 except Exception as error:
-                    print("lipsync error:", error)
+                    print("Lip synchronization unavailable")
             analyze_task = asyncio.create_task(_analyze())
     if analyze_task:
         await analyze_task
     return {
-        **result,
+        "voice_gender": gender,
         "segments": segments,
         "tts_available": any(segment["audio"] for segment in segments),
     }
+
+
+@app.post("/api/tts")
+async def tts(req: TTSRequest):
+    gender = tts_gateway.voice_gender(req.avatar_id or DEFAULT_AVATAR, req.voice_gender)
+    return await speech_segments(req.text, gender)
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    result = build_reply(req.text, req.context)
+    result = await reply_with_model(req.text, req.context, result, req.history)
+    gender = tts_gateway.voice_gender(req.avatar_id or DEFAULT_AVATAR, req.voice_gender)
+    return {**result, **await speech_segments(result["reply"], gender)}
 
 
 if __name__ == "__main__":

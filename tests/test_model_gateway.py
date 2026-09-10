@@ -152,4 +152,29 @@ class ModelGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("".join(s["text"] for s in result["segments"]), payload["reply"])
         self.assertNotIn("test-secret", json.dumps(result))
         self.assertEqual(await server.health(), {"status": "ok", "tts_available": server.edge_tts is not None,
-                                                "llm_configured": True})
+                                                "llm_configured": True, "tts_protocol":"edge", "tts_configured":False, "tts_edge_available":server.edge_tts is not None})
+
+
+    async def test_anthropic_protocol_preserves_schema_and_rules(self):
+        real_client = httpx.AsyncClient
+        with patch.dict(os.environ, {"DIGITALHELPER_LLM_PROTOCOL":"anthropic"}):
+            for reason in ["end_turn", "max_tokens", "refusal"]:
+                def handle(request):
+                    self.assertEqual(request.url.path, '/v1/messages')
+                    self.assertEqual(request.headers['x-api-key'], 'test-secret')
+                    self.assertEqual(request.headers['anthropic-version'], '2023-06-01')
+                    payload=json.loads(request.content)
+                    self.assertIn('system',payload)
+                    self.assertNotIn('response_format',payload)
+                    self.assertTrue(all(m['role']!='system' for m in payload['messages']))
+                    return httpx.Response(200,json={'stop_reason':reason,'content':[{'type':'text','text':json.dumps(answer())}]})
+                with patch.object(gateway.httpx,'AsyncClient',return_value=real_client(transport=httpx.MockTransport(handle))):
+                    if reason=='end_turn':
+                        self.assertEqual(await gateway.request_completion(gateway.configuration(),'hello'),answer())
+                    else:
+                        with self.assertRaises(ValueError):
+                            await gateway.request_completion(gateway.configuration(),'hello')
+            with patch.object(gateway,'request_completion',new=AsyncMock()) as call:
+                fallback=server.build_reply('预约门诊')
+                self.assertEqual(await gateway.reply_with_model('预约门诊',{},fallback),fallback)
+                call.assert_not_awaited()

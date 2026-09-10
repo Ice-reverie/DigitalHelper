@@ -763,3 +763,53 @@ test('startup resolves saved defaults through the catalog and falls back to Astr
   await f.run('initializeDefaultAvatar()');
   assert.equal(f.run('defaultLoad[3].id'),'AstraYao');
 });
+
+test('voice overrides are per avatar and auto restores the catalog preset', () => {
+  const f=frontend(), store=new Map();
+  f.sandbox.window.localStorage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)};
+  f.run("availableAvatars=[{id:'Harumasa',voice_gender:'male'},{id:'AstraYao',voice_gender:'female'}];currentAvatarId='Harumasa';refreshAvatarVoice()");
+  assert.equal(f.run('avatarVoice().voice_gender'),'male');
+  f.elements.get('avatar-voice-select').value='female';
+  f.elements.get('avatar-voice-select').handlers.change();
+  f.run("currentAvatarId='AstraYao';refreshAvatarVoice()");
+  assert.equal(f.elements.get('avatar-voice-select').value,'auto');
+  f.run("currentAvatarId='Harumasa';refreshAvatarVoice()");
+  assert.equal(f.elements.get('avatar-voice-select').value,'female');
+  f.elements.get('avatar-voice-select').value='auto';
+  f.elements.get('avatar-voice-select').handlers.change();
+  assert.equal(f.run('avatarVoice().voice_gender'),'male');
+});
+
+test('browser fallback chooses a matching Chinese voice without changing pitch', async () => {
+  const f=frontend(); let utterance;
+  f.sandbox.window.speechSynthesis={getVoices:()=>[{name:'Xiaoxiao',lang:'zh-CN'},{name:'Yunxi',lang:'zh-CN'}],speak:u=>{utterance=u;u.onend()}};
+  await f.run("speakWithBrowser('hello',speechGeneration,'male')");
+  assert.equal(utterance.voice.name,'Yunxi');
+  assert.equal(utterance.pitch,undefined);
+  await f.run("speakWithBrowser('hello',speechGeneration,'female')");
+  assert.equal(utterance.voice.name,'Xiaoxiao');
+});
+
+test('late chat audio and actions are discarded after an avatar switch', async () => {
+  const f=frontend();let resolveChat, payload;
+  f.elements.get('send-btn').disabled=false;
+  f.sandbox.fetch=(url,options)=>new Promise(resolve=>{resolveChat=resolve;payload=JSON.parse(options.body)});
+  f.run("availableAvatars=[{id:'Harumasa',voice_gender:'male'}];currentAvatarId='Harumasa';refreshAvatarVoice();playCount=0;actionCount=0;playSegments=async()=>{playCount++;return {failed:0}};handleAction=()=>actionCount++");
+  const pending=f.run("sendMessage('谢谢')");
+  assert.equal(payload.avatar_id,'Harumasa');assert.equal(payload.voice_gender,'male');
+  f.run("stopCurrentSpeech();currentAvatarId='AstraYao'");
+  resolveChat({ok:true,json:async()=>({reply:'不客气',action:'thanks',segments:[{text:'不客气'}]})});
+  await pending;
+  assert.equal(f.run('playCount'),0);assert.equal(f.run('actionCount'),0);
+});
+
+test('a stale preview cannot restart audio after voice cancellation', async () => {
+  const f=frontend();let complete;
+  f.sandbox.fetch=()=>new Promise(resolve=>{complete=resolve});
+  f.run('played=0;playSegments=async()=>{played++;return {failed:0}}');
+  const pending=f.run('previewAvatarVoice()');
+  f.run('stopCurrentSpeech()');
+  complete({ok:true,json:async()=>({segments:[{text:'hello'}],voice_gender:'female'})});
+  await pending;
+  assert.equal(f.run('played'),0);
+});
