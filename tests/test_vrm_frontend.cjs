@@ -701,3 +701,31 @@ test('rejected greet clips release the temporary smile expression', () => {
   assert.deepEqual(Array.from(f.run('cleanup')),['clear','unregister','remove']);
   assert.equal(f.run('scenePlayback'),null);
 });
+
+test('discovered avatar names support unicode and removed selections fall back', async () => {
+  const f=frontend();
+  f.sandbox.fetch=async()=>({ok:true,json:async()=>[{id:'新人物 #1',label:'新人物 #1',profile:'standard'}]});
+  f.elements.get('avatar-select').value='removed';
+  await f.run('loadAvatarCatalog()');
+  assert.equal(f.elements.get('avatar-select').value,'新人物 #1');
+  f.run('loadVrm=(url)=>selectedUrl=url');
+  f.elements.get('switch-avatar-btn').handlers.click();
+  assert.equal(f.run('selectedUrl'),'/api/avatars/'+encodeURIComponent('新人物 #1'));
+  f.sandbox.fetch=async()=>({ok:true,json:async()=>[]});
+  await f.run('loadAvatarCatalog()');
+  assert.equal(f.elements.get('avatar-select').disabled,true);
+  assert.equal(f.elements.get('switch-avatar-btn').disabled,true);
+  assert.equal(f.run('availableAvatars.length'),0);
+});
+
+test('older avatar catalog results cannot overwrite a fresh directory scan', async () => {
+  const f=frontend();
+  let resolveOld;
+  f.sandbox.fetch=()=>new Promise(resolve=>{resolveOld=resolve});
+  const pending=f.run('loadAvatarCatalog()');
+  f.sandbox.fetch=async()=>({ok:true,json:async()=>[{id:'new',label:'new',profile:'standard'}]});
+  await f.run('loadAvatarCatalog()');
+  resolveOld({ok:true,json:async()=>[{id:'old',label:'old',profile:'standard'}]});
+  await pending;
+  assert.equal(f.run('availableAvatars[0].id'),'new');
+});
