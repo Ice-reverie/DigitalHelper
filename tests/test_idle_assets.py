@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import math
 import struct
@@ -20,21 +19,21 @@ def read_vrm(path):
 
 
 class IdleAssetsTests(unittest.TestCase):
-    def test_character_copy_preserves_original_geometry_and_binds_existing_shapes(self):
-        source, source_buffer = read_vrm(MODELS / 'characters/Lumine.vrm')
-        adapted, adapted_buffer = read_vrm(MODELS / 'characters/Lumine_companion.vrm')
-        self.assertEqual(source_buffer, adapted_buffer)
-        groups = adapted['extensions']['VRM']['blendShapeMaster']['blendShapeGroups']
-        blink = next(g for g in groups if g['presetName'] == 'blink')
-        self.assertEqual(len(blink['binds']), 2)
+    def test_default_character_has_valid_expression_bindings(self):
+        model, _ = read_vrm(MODELS / 'characters/AstraYao.vrm')
+        groups = model['extensions']['VRM']['blendShapeMaster']['blendShapeGroups']
+        self.assertTrue({'a', 'i', 'u', 'e', 'o', 'blink'} <= {g['presetName'] for g in groups})
         for group in groups:
             for bind in group['binds']:
-                mesh = source['meshes'][bind['mesh']]
-                self.assertLess(bind['index'], len(mesh['primitives'][0]['targets']))
+                mesh = model['meshes'][bind['mesh']]
+                self.assertTrue(any(bind['index'] < len(primitive.get('targets', []))
+                                    for primitive in mesh['primitives']))
 
     def test_blender_tracks_are_finite_normalized_and_seamless(self):
         data = json.loads((MODELS / 'animations/Lumine_idle.json').read_text())
-        self.assertEqual(data['sourceSha256'], hashlib.sha256((MODELS / 'characters/Lumine.vrm').read_bytes()).hexdigest())
+        # This legacy idle asset keeps its source hash for provenance; the
+        # source Lumine model is not part of the current character catalog.
+        self.assertRegex(data['sourceSha256'], r'^[0-9a-f]{64}$')
         expected_samples = round(data['duration'] * data['fps']) + 1
         self.assertGreater(len(data['tracks']), 20)
         for track in data['tracks']:
@@ -50,7 +49,7 @@ class IdleAssetsTests(unittest.TestCase):
     def test_default_routes_use_classified_assets(self):
         avatar = asyncio.run(vrm_server.default_avatar())
         idle = asyncio.run(vrm_server.default_idle())
-        self.assertEqual(Path(avatar.path).resolve(), (MODELS / 'characters/Lumine_companion.vrm').resolve())
+        self.assertEqual(Path(avatar.path).resolve(), (MODELS / 'characters/AstraYao.vrm').resolve())
         self.assertEqual(Path(idle.path).resolve(), (MODELS / 'animations/Lumine_idle.json').resolve())
         self.assertTrue(Path(avatar.path).is_file())
         self.assertTrue(Path(idle.path).is_file())

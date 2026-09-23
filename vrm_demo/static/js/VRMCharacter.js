@@ -1,8 +1,7 @@
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { VRMLoaderPlugin, VRMUtils, VRMExpression, VRMExpressionMorphTargetBind } from '@pixiv/three-vrm';
-import { createVRMAnimationClip, VRMAnimationLoaderPlugin } from '@pixiv/three-vrm-animation';
+// The conversation starts even when the optional 3D bundle cannot load.
+let THREE = globalThis.THREE || null;
+let GLTFLoader, OrbitControls, VRMLoaderPlugin, VRMUtils;
+let VRMExpression, VRMExpressionMorphTargetBind, createVRMAnimationClip, VRMAnimationLoaderPlugin;
 
 
 const elements = {
@@ -69,8 +68,8 @@ let handIdleTime = 0;
 let mixer = null;
 let activeAction = null;
 let conversationContext = {};
-let conversationHistory = [];
-const MAX_HISTORY = 10;
+let chatRequestId = 0;
+const activeSpeechControllers = new Set();
 
 let audioContext = null;
 let speaking = false;
@@ -88,13 +87,28 @@ let currentVisemes = null;
 
 
 
-initThree();
 bindUI();
 initSpeechRecognition();
 checkService();
 addMessage('您好，我是小安。点一下「开始说话」，告诉我哪里不舒服，或需要什么帮助。我会陪您一步步完成。', false);
 renderQuickReplies();
-initializeDefaultAvatar();
+startAvatar();
+
+async function startAvatar() {
+  try {
+    if (!THREE) {
+      const libraries = await import('./vrm-dependencies.js');
+      ({THREE, GLTFLoader, OrbitControls, VRMLoaderPlugin, VRMUtils,
+        VRMExpression, VRMExpressionMorphTargetBind, createVRMAnimationClip,
+        VRMAnimationLoaderPlugin} = libraries);
+    }
+    initThree();
+  } catch (error) {
+    console.warn('3D 资源无法载入，继续使用文字和语音交互。', error);
+    setModelStatus('无模型交互模式', '3D 资源暂不可用，文字、语音和服务流程仍可使用。');
+  }
+  await initializeDefaultAvatar();
+}
 
 function initThree() {
   try {
@@ -392,18 +406,33 @@ function renderQuickReplies(replies = []) {
   });
 }
 
-async function sendMessage(providedText = '', startNewService = false) {
+function renderRetry(text, startNewService) {
+  elements.quickReplies.replaceChildren();
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'quick-btn';
+  button.textContent = '重新尝试';
+  button.addEventListener('click', () => sendMessage(text, startNewService, true));
+  elements.quickReplies.appendChild(button);
+}
+
+function enableConversation() {
+  elements.sendButton.disabled = false;
+  elements.voiceButton.disabled = !recognition;
+  serviceButtons.forEach((button) => { button.disabled = false; });
+  elements.quickReplies.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+}
+
+async function sendMessage(providedText = '', startNewService = false, retry = false) {
   const text = (providedText || elements.textInput.value).trim();
   if (!text || elements.sendButton.disabled) return;
 
+  const requestId = ++chatRequestId;
   stopCurrentSpeech();
   const requestGeneration = speechGeneration;
   const voice = avatarVoice();
 
-  conversationHistory.push({ role: 'user', content: text });
-  if (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
-
-  addMessage(text, true);
+  if (!retry) addMessage(text, true);
   elements.textInput.value = '';
   elements.sendButton.disabled = true;
   elements.voiceButton.disabled = true;
@@ -412,21 +441,21 @@ async function sendMessage(providedText = '', startNewService = false) {
   setInteractionStatus('正在为您处理，请稍候……');
   initAudioContext().catch((error) => console.warn('音频初始化失败，将尝试浏览器播报。', error));
 
+  const chatController = new AbortController();
+  const chatTimer = setTimeout(() => chatController.abort(), 25000);
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, ...voice, context: startNewService ? {} : conversationContext, history: conversationHistory }),
+      signal: chatController.signal,
+      body: JSON.stringify({ text, ...voice, context: startNewService ? {} : conversationContext, include_audio: false }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
     conversationContext = data.context || {};
     const replyText = data.reply || '';
-    conversationHistory.push({ role: 'assistant', content: replyText });
-    if (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
-    const note = data.tts_available ? '' : '当前使用浏览器语音播报';
-    addMessage(replyText, false, note);
+    addMessage(replyText, false);
     renderQuickReplies(data.quick_replies || []);
     if (requestGeneration !== speechGeneration) {
       setInteractionStatus('已为您回复，请查看文字。');
@@ -435,7 +464,10 @@ async function sendMessage(providedText = '', startNewService = false) {
     handleAction(data.action);
 
     setInteractionStatus('正在为您朗读，请稍候……');
-    const playback = await playSegments(data.segments?.length ? data.segments : [{ text: replyText }], data.voice_gender || voice.voice_gender);
+    enableConversation();
+    const playback = await playReplySegments(data.segments?.length ? data.segments : [{ text: replyText }],
+      {...voice, voice_gender: data.voice_gender || voice.voice_gender}, requestGeneration);
+    if (requestGeneration !== speechGeneration) return;
     setInteractionStatus(
       playback.failed ? '部分语音暂时无法播放，请查看下方文字回复。'
         : data.context?.flow ? '请按下方提示，选择下一步。' : '已为您回复，还需要什么帮助？',
@@ -443,16 +475,48 @@ async function sendMessage(providedText = '', startNewService = false) {
     );
   } catch (error) {
     console.error('请求失败：', error);
-    if (conversationHistory.length && conversationHistory[conversationHistory.length - 1].role === 'user') conversationHistory.pop();
     addMessage('抱歉，服务暂时没有响应。请确认后端已经启动，再试一次。', false);
-    renderQuickReplies(['重新尝试']);
+    renderRetry(text, startNewService);
     setInteractionStatus('服务连接失败，文字内容未提交。', 'warning');
   } finally {
-    elements.sendButton.disabled = false;
-    elements.voiceButton.disabled = !recognition;
-    serviceButtons.forEach((button) => { button.disabled = false; });
-    elements.quickReplies.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+    clearTimeout(chatTimer);
+    if (requestId === chatRequestId) enableConversation();
   }
+}
+
+async function playReplySegments(segments, voice, generation) {
+  const result = {played: 0, failed: 0};
+  if (!segments.length) return result;
+  let next = fetchSpeechPart(segments[0], voice, generation);
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = await next;
+    if (generation !== speechGeneration) break;
+    next = index + 1 < segments.length ? fetchSpeechPart(segments[index + 1], voice, generation) : null;
+    const played = await playSegments([segment], voice.voice_gender, false);
+    result.played += played.played;
+    result.failed += played.failed;
+  }
+  return result;
+}
+
+async function fetchSpeechPart(part, voice, generation) {
+  const controller = new AbortController();
+  activeSpeechControllers.add(controller);
+  const timer = setTimeout(() => controller.abort(), 35000);
+  let segment = {text: part.text};
+  try {
+    const response = await fetch('/api/tts', {method:'POST', headers:{'Content-Type':'application/json'},
+      signal:controller.signal, body:JSON.stringify({text:part.text, ...voice})});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    segment = data.segments?.[0] || segment;
+  } catch (error) {
+    if (generation === speechGeneration) console.warn('在线语音暂不可用，尝试浏览器播报。', error);
+  } finally {
+    clearTimeout(timer);
+    activeSpeechControllers.delete(controller);
+  }
+  return segment;
 }
 
 function handleAction(actionName) {
@@ -1209,6 +1273,8 @@ async function initAudioContext() {
 function stopCurrentSpeech() {
   playbackStopped = true;
   speechGeneration += 1;
+  for (const controller of activeSpeechControllers) controller.abort();
+  activeSpeechControllers.clear();
   const source = speechSourceRef;
   const cancel = cancelSpeechPlayback;
   speechSourceRef = null;
@@ -1236,8 +1302,8 @@ function base64ToBlob(base64, type) {
   return new Blob([bytes], { type });
 }
 
-async function playSegments(segments, gender = 'female') {
-  stopCurrentSpeech();
+async function playSegments(segments, gender = 'female', reset = true) {
+  if (reset) stopCurrentSpeech();
   playbackStopped = false;
   const generation = speechGeneration;
   const cancelled = () => playbackStopped || generation !== speechGeneration;

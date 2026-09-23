@@ -75,10 +75,8 @@ def rule_owned(text, context, fallback):
     )
 
 
-async def request_completion(config, text, history=None):
+async def request_completion(config, text):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if history:
-        messages.extend(history[-10:])
     messages.append({"role": "user", "content": text})
     anthropic = config.get("protocol") == "anthropic"
     endpoint = "/messages" if anthropic else "/chat/completions"
@@ -132,12 +130,12 @@ def validated_reply(payload, fallback):
     return {**fallback, "reply": reply.strip(), "action": "explain" if sources else payload["action"]}
 
 
-async def reply_with_model(text, context, fallback, history=None):
+async def reply_with_model(text, context, fallback):
     config = configuration()
     if config is None or rule_owned(text, context, fallback):
         return fallback
     try:
-        payload = await asyncio.wait_for(request_completion(config, text, history), MODEL_TIMEOUT)
+        payload = await asyncio.wait_for(request_completion(config, text), MODEL_TIMEOUT)
         return validated_reply(payload, fallback) or fallback
     except Exception:
         # Never log upstream exceptions: they can contain credentials, URLs or user text.

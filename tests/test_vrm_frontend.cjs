@@ -137,6 +137,99 @@ test('sending consecutive messages restarts speech after stopping the previous r
   assert.equal(f.run('playbackStopped || speaking || browserSpeaking'),false);
 });
 
+test('chat shows text and unlocks controls before speech synthesis finishes', async () => {
+  const f = frontend();
+  let finishSpeech;
+  const requests = [];
+  f.sandbox.fetch = (url, options) => {
+    requests.push({url, body: JSON.parse(options.body)});
+    if (url === '/api/chat') return Promise.resolve({ok:true, json:async()=>({
+      reply:'文字先到了。', action:null, context:{}, segments:[{text:'文字先到了。'}]
+    })});
+    return new Promise(resolve => { finishSpeech = resolve; });
+  };
+  f.run('handleAction=()=>{}');
+  const pending = f.run("sendMessage('你好')");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.elements.get('send-btn').disabled, false);
+  assert.equal(f.elements.get('history-messages').children.length, 3);
+  assert.equal(requests[0].body.include_audio, false);
+  assert.equal('history' in requests[0].body, false);
+  assert.equal(requests[1].url, '/api/tts');
+  finishSpeech({ok:true, json:async()=>({segments:[{text:'文字先到了。'}]})});
+  await pending;
+});
+
+test('next sentence starts synthesizing while the current sentence plays', async () => {
+  const f = frontend();
+  let finishSecond;
+  const requests = [];
+  let utterance;
+  f.sandbox.window.speechSynthesis = {cancel(){}, speak(value){utterance=value; value.onstart();}};
+  f.sandbox.fetch = (url, options) => {
+    requests.push(JSON.parse(options.body).text);
+    if (requests.length === 1) return Promise.resolve({ok:true, json:async()=>({segments:[{text:'第一句'}]})});
+    return new Promise(resolve => {finishSecond = resolve;});
+  };
+  const pending = f.run("playReplySegments([{text:'第一句'},{text:'第二句'}],{voice_gender:'female'},speechGeneration)");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests, ['第一句', '第二句']);
+  assert.equal(utterance.text, '第一句');
+  finishSecond({ok:true, json:async()=>({segments:[{text:'第二句'}]})});
+  utterance.onend();
+  await new Promise(resolve => setImmediate(resolve));
+  utterance.onend();
+  const result = await pending;
+  assert.equal(result.played, 2);
+  assert.equal(result.failed, 0);
+});
+
+test('retry resends the failed request without duplicating the user message', async () => {
+  const f = frontend();
+  const chatBodies = [];
+  f.sandbox.fetch = (url, options) => {
+    if (url === '/api/tts') return Promise.resolve({ok:true, json:async()=>({segments:[{text:'好的'}]})});
+    chatBodies.push(JSON.parse(options.body));
+    if (chatBodies.length === 1) return Promise.reject(Error('offline'));
+    return Promise.resolve({ok:true, json:async()=>({reply:'好的', context:{}, segments:[{text:'好的'}]})});
+  };
+  f.run('handleAction=()=>{}');
+  await f.run("sendMessage('预约门诊', true)");
+  const retry = f.elements.get('quick-replies').children[0];
+  assert.equal(retry.textContent, '重新尝试');
+  await retry.handlers.click();
+  assert.deepEqual(chatBodies.map(body => body.text), ['预约门诊', '预约门诊']);
+  assert.deepEqual(chatBodies.map(body => body.context), [{}, {}]);
+  assert.equal(f.elements.get('history-messages').children.length, 4);
+});
+
+test('cancelled old speech cannot unlock a newer chat request', async () => {
+  const f = frontend();
+  let secondChat;
+  let chats = 0;
+  f.sandbox.fetch = (url, options) => {
+    if (url === '/api/chat') {
+      chats++;
+      if (chats === 2) return new Promise(resolve => {secondChat = resolve;});
+      return Promise.resolve({ok:true, json:async()=>({reply:'第一条回复', context:{}, segments:[{text:'第一句'}]})});
+    }
+    if (chats === 1) return new Promise((resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(Error('aborted')));
+    });
+    return Promise.resolve({ok:true, json:async()=>({segments:[{text:'第二句'}]})});
+  };
+  f.run('handleAction=()=>{}');
+  const old = f.run("sendMessage('第一条')");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.elements.get('send-btn').disabled, false);
+  const current = f.run("sendMessage('第二条')");
+  await old;
+  assert.equal(f.elements.get('send-btn').disabled, true);
+  secondChat({ok:true, json:async()=>({reply:'第二条回复', context:{}, segments:[{text:'第二句'}]})});
+  await current;
+  assert.equal(f.elements.get('send-btn').disabled, false);
+});
+
 test('cancelled browser speech settles without callbacks and late events cannot stop a new reply', async () => {
   const f=frontend();const utterances=[];
   f.sandbox.window.speechSynthesis={cancel(){},speak(u){utterances.push(u);u.onstart();}};

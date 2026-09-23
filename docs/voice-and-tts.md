@@ -4,7 +4,7 @@
 
 打开「帮助与设置 → 演示人员设置」。声音选择针对**当前已加载人物**，不是尚未点击「切换形象」的下拉候选人物。
 
-- 「跟随人物」：Harumasa 默认男声；AnbyDemara、AstraYao、Eula、Yidhari 默认女声。未知人物默认女声。配置由后端 `tts_gateway.py` 的人物映射维护。
+- 「跟随人物」：Harumasa、doctorBoy、schoolBoy 默认男声；AnbyDemara、AstraYao、Eula、Yidhari、schoolGirl、studentGirl 默认女声。未知人物默认女声。配置由后端 `tts_gateway.py` 的人物映射维护。
 - 「男声／女声」：覆盖当前人物的声音，按人物 ID 保存到当前浏览器，刷新后保留。选择「跟随人物」恢复预设。
 - 「试听」：只生成固定的试听句子，不进入聊天业务流程。切换人物、声音或开始另一段语音会取消旧播放；过期回复仍显示文字，但不会在新人物上播放旧音频或动作。
 - 浏览器本地声音缺少对应男女音色时，只能使用现有中文声音；不会通过改变音高伪造性别。
@@ -70,7 +70,7 @@ OpenAI 兼容模式追加 `/chat/completions`；Anthropic 模式追加 `/message
 }
 ```
 
-`POST /api/chat` 同样接受可选 `avatar_id`、`voice_gender`，保留原 reply/action/context/quick_replies 等字段。旧客户端不传时使用系统默认人物声音。
+`POST /api/chat` 同样接受可选 `avatar_id`、`voice_gender`，保留原 reply/action/context/quick_replies 等字段。旧客户端不传时使用系统默认人物声音。网页端还传入 `include_audio: false`，先取得文字、动作和分句文本，再逐句请求 `/api/tts`；省略该字段的旧客户端继续收到包含语音的完整响应。聊天历史仅保留在浏览器中，不会发送给模型服务。
 
 `GET /api/health` 增加 `tts_protocol`、`tts_configured`、`tts_edge_available`；这些只表示配置与依赖状态，不保证上游当前可用。不返回 Key、Base URL 或用户输入。
 

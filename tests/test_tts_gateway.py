@@ -33,7 +33,9 @@ class SpeechTests(unittest.IsolatedAsyncioTestCase):
     async def test_api_gender_validation_catalog_and_shared_chat(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
             with patch.object(server, "tts_to_mp3", new=AsyncMock(return_value=b"")) as synth:
-                for avatar, override, expected in [("Harumasa", "auto", "male"), ("AstraYao", "auto", "female"),
+                for avatar, override, expected in [("Harumasa", "auto", "male"), ("doctorBoy", "auto", "male"),
+                                                   ("schoolBoy", "auto", "male"), ("schoolGirl", "auto", "female"),
+                                                   ("studentGirl", "auto", "female"), ("AstraYao", "auto", "female"),
                                                    ("unknown", "auto", "female"), ("AstraYao", "male", "male")]:
                     response = await client.post('/api/tts', json={"text":"您好", "avatar_id":avatar, "voice_gender":override})
                     self.assertEqual(response.status_code, 200)
@@ -46,6 +48,8 @@ class SpeechTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((await client.post('/api/tts', json=body)).status_code,422)
                 catalog = (await client.get('/api/avatars')).json()
                 self.assertEqual(next(v for v in catalog if v['id']=='Harumasa')['voice_gender'],'male')
+                for name in ('doctorBoy', 'schoolBoy'):
+                    self.assertEqual(next(v for v in catalog if v['id']==name)['voice_gender'], 'male')
 
     async def test_external_wire_and_actual_audio_validation(self):
         real_client = httpx.AsyncClient

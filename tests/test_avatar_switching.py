@@ -12,6 +12,15 @@ from vrm_demo import vrm_server as server
 
 
 class AvatarSwitchingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_characters_have_readable_labels_and_standard_profiles(self):
+        catalog = {item['id']: item for item in await server.avatar_catalog()}
+        expected = {'doctorBoy': '医生（男）', 'schoolBoy': '校服男生',
+                    'schoolGirl': '校服女生', 'studentGirl': '学生女生'}
+        for name, label in expected.items():
+            with self.subTest(name=name):
+                self.assertEqual(catalog[name]['label'], label)
+                self.assertEqual(catalog[name]['profile'], 'standard')
+
     async def test_catalog_and_all_models_are_served_without_directory_access(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url='http://test') as client:
             catalog = (await client.get('/api/avatars')).json()

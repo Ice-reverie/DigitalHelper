@@ -23,6 +23,21 @@ class DemoConversationTests(unittest.TestCase):
         self.assertEqual(confirmed["context"], {})
         self.assertIn("已确认", confirmed["reply"])
 
+    def test_negated_actions_do_not_complete_demo_flows(self):
+        alert = build_reply("查看健康预警")["context"]
+        for text in ("还没确认", "先不要确认", "我不想联系家人", "不要稍后提醒"):
+            with self.subTest(text=text):
+                result = build_reply(text, alert)
+                self.assertEqual(result["context"], alert)
+                self.assertIn("我已确认", result["quick_replies"])
+        appointment = {"flow": "appointment", "step": "final_confirm",
+                       "department": "内科", "time": "明天上午"}
+        for text in ("先不要确认", "还没确认预约", "不要取消预约", "不重新选择"):
+            with self.subTest(text=text):
+                result = build_reply(text, appointment)
+                self.assertEqual(result["context"], appointment)
+                self.assertIn("确认预约", result["quick_replies"])
+
     def test_appointment_flow_requires_final_confirmation(self):
         start = build_reply("帮我预约门诊")
         department = build_reply("康复科", start["context"])
@@ -65,6 +80,51 @@ class DemoConversationTests(unittest.TestCase):
 
 
 class SpeechPipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_chat_returns_before_speech_synthesis(self):
+        async def use_rules(text, context, fallback):
+            return fallback
+
+        with patch.object(server, "tts_to_mp3", new=AsyncMock()) as synthesize, \
+             patch.object(server, "reply_with_model", side_effect=use_rules):
+            result = await server.chat(server.ChatRequest(text="预约门诊", include_audio=False))
+        synthesize.assert_not_awaited()
+        self.assertEqual(result["action"], "booking")
+        self.assertEqual("".join(part["text"] for part in result["segments"]), result["reply"])
+        self.assertNotIn("audio", result["segments"][0])
+
+    async def test_legacy_chat_has_total_speech_budget(self):
+        async def stalled(*args):
+            await asyncio.Event().wait()
+
+        with patch.object(server, "speech_segments", side_effect=stalled), \
+             patch.object(server, "LEGACY_AUDIO_BUDGET_SECONDS", .01):
+            result = await server.chat(server.ChatRequest(text="你好"))
+        self.assertFalse(result["tts_available"])
+        self.assertEqual(result["segments"][0]["audio"], "")
+
+    async def test_next_synthesis_overlaps_previous_analysis(self):
+        analyzing = asyncio.Event()
+        release = asyncio.Event()
+        started = []
+
+        async def synthesize(text, gender):
+            started.append(text)
+            if text == "second":
+                await analyzing.wait()
+                release.set()
+            return b"audio"
+
+        async def analyze(*args):
+            analyzing.set()
+            await release.wait()
+            return []
+
+        with patch.object(server, "split_sentence", return_value=["first", "second"]), \
+             patch.object(server, "tts_to_mp3", side_effect=synthesize), \
+             patch.object(server, "run_in_threadpool", side_effect=analyze):
+            await asyncio.wait_for(server.speech_segments("ignored", "female"), 1)
+        self.assertEqual(started, ["first", "second"])
+
     async def test_synthesis_runs_sequentially_and_returns_sentence_order(self):
         started = []
         all_started = asyncio.Event()

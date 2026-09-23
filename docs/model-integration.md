@@ -4,7 +4,7 @@
 
 ## 后端配置
 
-本版支持 OpenAI 兼容的 Chat Completions JSON 协议。协议参考：[请求格式](https://api-docs.deepseek.com/api/create-chat-completion/)、[JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)。不包括 Responses、Anthropic 原生协议或任意请求模板；API Key 设置页面暂未加入。
+本版支持 OpenAI 兼容的 Chat Completions JSON 协议及 Anthropic Messages 协议。协议参考：[请求格式](https://api-docs.deepseek.com/api/create-chat-completion/)、[JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)。不包括 Responses 或任意请求模板；API Key 设置页面暂未加入。
 
 安装依赖：`python -m pip install "httpx>=0.27,<1" "python-dotenv>=1,<2"`（也已列入 requirements.txt）。
 
@@ -42,7 +42,7 @@ Base URL 填服务商文档要求的前缀，系统追加 `/chat/completions`；
 - 尚未引入审核过的医疗知识库。已有健康规则及医疗关键词匹配的问题继续走规则；模型提示词要求对医疗问题和缺乏依据的问题拒答。资料 ID 校验和关键词过滤不等于事实证明，也不能保证覆盖所有医疗表达或消除幻觉；本版不适合用作医疗诊断系统。
 - 模型只可建议 explain 或 null；业务动作不能由模型触发。过长、额外流程字段、明显伪造操作结果或不合法的回复会被丢弃。
 
-目前模型调用为单轮，不上传历史对话、业务上下文或个人健康记录。启用后本轮普通聊天文本会发送给所配置的模型服务。
+目前模型调用为单轮，只向所配置的模型服务发送本轮普通聊天文本；浏览器内的对话记录不会随请求上传。医疗与业务流程继续由本地规则处理。请勿在普通聊天中输入不希望发送给模型服务的个人信息。
 
 ## 验证
 

@@ -58,7 +58,7 @@ if /i "%~1"=="--check" (
 if errorlevel 1 (
     echo [ERROR] Required dependencies are missing in this environment.
     echo Install them with:
-    echo "%RUN_PYTHON%" %RUN_PYTHON_ARGS% -m pip install fastapi uvicorn pydantic edge-tts httpx python-dotenv
+    echo "%RUN_PYTHON%" %RUN_PYTHON_ARGS% -m pip install -r requirements-vrm.txt
     set "RUN_EXIT=1"
     goto :finish
 )

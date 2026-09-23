@@ -24,6 +24,7 @@ web_demo/models/
 
 build
 /output/
+/node_modules/
 data_preparation.py
 inference_mini.py
 tmp.py

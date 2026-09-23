@@ -21,7 +21,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
-MALE_AVATARS = {"Harumasa", "Wriothesley", "Ratio", "Anaxa", "Ashveil", "Lohen"}
+MALE_AVATARS = {"Harumasa", "doctorBoy", "schoolBoy", "Wriothesley", "Ratio", "Anaxa", "Ashveil", "Lohen"}
 
 
 def voice_gender(avatar_id=None, override="auto"):

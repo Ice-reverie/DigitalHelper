@@ -47,6 +47,12 @@ mimetypes.add_type("text/javascript", ".js")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 DEFAULT_AVATAR = "AstraYao"
+AVATAR_LABELS = {
+    "doctorBoy": "医生（男）",
+    "schoolBoy": "校服男生",
+    "schoolGirl": "校服女生",
+    "studentGirl": "学生女生",
+}
 
 
 @app.get("/api/avatar")
@@ -74,7 +80,7 @@ def avatar_files():
 
 @app.get("/api/avatars")
 async def avatar_catalog():
-    return [{"id": name, "label": "AstraYao（默认）" if name == DEFAULT_AVATAR else "Lumine（适配版）" if name == "Lumine_companion" else name,
+    return [{"id": name, "label": "AstraYao（默认）" if name == DEFAULT_AVATAR else "Lumine（适配版）" if name == "Lumine_companion" else AVATAR_LABELS.get(name, name),
              "voice_gender": tts_gateway.voice_gender(name),
              "profile": "lumine" if name in {"Lumine_companion", "Lumine"} else "standard"}
             for name in avatar_files()]
@@ -158,6 +164,7 @@ async def scene_animation(name: str):
 
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 TTS_TIMEOUT_SECONDS = 15
+LEGACY_AUDIO_BUDGET_SECONDS = 45
 SEGMENT_CONCURRENCY = 3
 DEPARTMENTS = ["内科", "外科", "康复科", "体检中心"]
 APPOINTMENT_TIMES = ["明天上午", "明天下午", "后天上午"]
@@ -281,7 +288,7 @@ class TTSRequest(BaseModel):
 
 class ChatRequest(TTSRequest):
     context: Dict[str, str] = Field(default_factory=dict)
-    history: List[Dict[str, str]] = Field(default_factory=list)
+    include_audio: bool = True
 
 
 def match_action(text: str):
@@ -319,25 +326,26 @@ def _result(reply, action=None, quick_replies=None, context=None):
 def build_reply(text: str, context: Dict[str, str] | None = None):
     """Return a deterministic demo response without calling an LLM or hospital system."""
     message = text.strip()
+    choice = re.sub(r"[\s，。！？!?,.；;]+", "", message)
     state = dict(context or {})
     flow = state.get("flow")
     step = state.get("step")
 
-    if flow == "appointment" and any(word in message for word in ["取消", "退出", "不预约了", "不挂号了"]):
+    if flow == "appointment" and choice in {"取消", "取消预约", "请取消预约", "退出", "退出预约", "不预约了", "不挂号了"}:
         return _result("本次模拟预约已取消。您还可以继续咨询其他服务。", "confirm")
 
     if flow == "alert":
-        if any(word in message for word in ["已确认", "知道了", "确认"]):
+        if choice in {"确认", "已确认", "我已确认", "知道了", "我知道了"}:
             return _result(
                 "好的，健康预警已在本次演示中标记为已确认。请留意身体变化，如有明显不适请及时就医。",
                 "confirm",
             )
-        if "联系家人" in message:
+        if choice in {"联系家人", "请联系家人", "帮我联系家人"}:
             return _result(
                 "好的，已模拟向家人发起联系提醒。演示系统不会真实发送消息。",
                 "confirm",
             )
-        if any(word in message for word in ["稍后", "提醒我"]):
+        if choice in {"稍后", "稍后提醒", "提醒我", "稍后提醒我"}:
             return _result(
                 "好的，已模拟设置稍后提醒。演示系统不会真实创建通知。",
                 "confirm",
@@ -381,14 +389,14 @@ def build_reply(text: str, context: Dict[str, str] | None = None):
         return _result("请选择一个预约时间。", "booking", APPOINTMENT_TIMES + ["取消预约"], state)
 
     if flow == "appointment" and step == "final_confirm":
-        if "重新" in message:
+        if choice in {"重新选择", "重新选科室", "请重新选择"}:
             return _result(
                 "好的，请重新选择科室。",
                 "booking",
                 DEPARTMENTS + ["取消预约"],
                 {"flow": "appointment", "step": "department"},
             )
-        if "确认" in message:
+        if choice in {"确认预约", "我确认预约", "确定预约", "确认挂号", "我确认挂号"}:
             department = state.get("department", "所选科室")
             appointment_time = state.get("time", "所选时间")
             return _result(
@@ -486,15 +494,11 @@ async def _warmup_tts():
 async def speech_segments(text: str, gender: str):
     sentences = split_sentence(text)
 
-    # edge_tts cannot run in parallel (WebSocket contention), so synthesize
-    # sequentially but kick off Rhubarb analysis in a worker thread so the
-    # next sentence's TTS overlaps the previous sentence's analysis.
+    # Synthesize sequentially; overlap each Rhubarb analysis with the next TTS.
     segments = [None] * len(sentences)
-    analyze_task = None
+    analyses = []
+    analysis_slots = asyncio.Semaphore(SEGMENT_CONCURRENCY)
     for i, sentence in enumerate(sentences):
-        if analyze_task:
-            await analyze_task
-            analyze_task = None
         audio = b""
         try:
             audio = await asyncio.wait_for(tts_to_mp3(sentence, gender), timeout=2*TTS_TIMEOUT_SECONDS)
@@ -511,12 +515,13 @@ async def speech_segments(text: str, gender: str):
         if audio:
             async def _analyze(s=seg, a=audio):
                 try:
-                    s["visemeTimeline"] = await run_in_threadpool(analyze_audio, a)
+                    async with analysis_slots:
+                        s["visemeTimeline"] = await run_in_threadpool(analyze_audio, a)
                 except Exception as error:
                     print("Lip synchronization unavailable")
-            analyze_task = asyncio.create_task(_analyze())
-    if analyze_task:
-        await analyze_task
+            analyses.append(asyncio.create_task(_analyze()))
+    if analyses:
+        await asyncio.gather(*analyses)
     return {
         "voice_gender": gender,
         "segments": segments,
@@ -533,9 +538,19 @@ async def tts(req: TTSRequest):
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     result = build_reply(req.text, req.context)
-    result = await reply_with_model(req.text, req.context, result, req.history)
+    result = await reply_with_model(req.text, req.context, result)
     gender = tts_gateway.voice_gender(req.avatar_id or DEFAULT_AVATAR, req.voice_gender)
-    return {**result, **await speech_segments(result["reply"], gender)}
+    if not req.include_audio:
+        return {**result, "voice_gender": gender,
+                "segments": [{"text": sentence} for sentence in split_sentence(result["reply"])]}
+    try:
+        speech = await asyncio.wait_for(
+            speech_segments(result["reply"], gender), LEGACY_AUDIO_BUDGET_SECONDS)
+    except asyncio.TimeoutError:
+        speech = {"voice_gender": gender, "tts_available": False,
+                  "segments": [{"text": sentence, "audio": "", "visemes": [], "visemeTimeline": []}
+                               for sentence in split_sentence(result["reply"])]}
+    return {**result, **speech}
 
 
 if __name__ == "__main__":
