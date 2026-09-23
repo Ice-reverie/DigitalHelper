@@ -1,14 +1,18 @@
-﻿# 数字人交互系统
+﻿# 数字人交互系统 / Digital Human Interaction System
+
+[中文](#中文) · [English](#english)
+
+## 中文
 
 > 拟人化三维数字人 + 自然语音交互系统（课程作业项目）
 
-## 项目简介
+### 项目简介
 
 本项目是一个基于 Web 的数字人交互系统：用户可以通过语音或文字完成健康查询、健康预警确认和服务预约演示。浏览器可按需加载 VRM 格式的三维虚拟人模型；3D 资源加载失败时，业务对话、语音输入与语音播报仍可独立使用。业务步骤由本地规则驱动；普通聊天可选配外部大模型。系统不连接医院或消息服务。
 
 本项目拥有"对话 + 语音合成"的服务能力，展示层采用「Three.js + three-vrm 三维渲染」的方案，使数字人具备可更换的 3D 形象、口型同步与肢体动作能力。
 
-## 功能特性
+### 功能特性
 
 - **VRM 模型加载**：通过网页文件选择器加载本地 `.vrm` 三维模型，支持随时更换，鼠标旋转缩放查看。
 - **内置人物切换**：「帮助与设置 → 演示人员设置」可选择当前 9 个模型，切换时自动调整全身视角，并适配待机、口型和标准骨骼动作；原始模型文件保持不变。
@@ -21,7 +25,7 @@
 - **关键词触发动作**：对话命中预设关键词时，自动加载并播放对应 `.vrma` 动作（greet / booking / alert / confirm / thanks / explain）。
 - **业务问答**：内置健康查询、预警确认、预约挂号、服务咨询、问候、致谢等意图。
 
-## 技术栈
+### 技术栈
 
 | 层次 | 技术 |
 |------|------|
@@ -34,7 +38,7 @@
 | 后端框架 | FastAPI + Uvicorn |
 | 语音合成 | edge-tts（微软 Azure 神经网络语音） |
 
-## 系统架构
+### 系统架构
 
 前后端分离的 B/S 架构。服务端负责对话与语音合成，前端负责三维渲染、口型驱动与交互。
 
@@ -45,14 +49,14 @@
         ├── /api/chat   对话、流程与动作匹配
         └── /api/tts    逐句语音合成
 
-## 环境要求
+### 环境要求
 
 - 操作系统：Windows 10/11
 - Python 3.12（推荐 Anaconda）
 - 现代浏览器（支持 ES Module、WebGL2）
 - 网络：在线语音或外部大模型需要网络；3D 依赖已打包在项目内。在线语音不可用时尝试浏览器语音播报
 
-## 安装与运行
+### 安装与运行
 
 Windows 下双击根目录的 `run.cmd` 即可启动，也可在终端执行。脚本依次查找项目的 `.venv`、`venv`、`env`、`virtualenv`，随后检查已激活的虚拟环境；没有时使用全局 `python` 或 `py -3`。缺少依赖时会提示安装命令，不会自动安装。`run.cmd --check` 仅检查并显示所选 Python，不启动服务。
 
@@ -69,7 +73,7 @@ python vrm_demo/vrm_server.py
 
 > 提示：若系统存在多个 Python 解释器，请使用实际安装依赖的解释器（例如 `D:\anaconda\python.exe`）。
 
-## 使用说明
+### 使用说明
 
 1. 打开页面后，可直接点击「开始说话」（不用按住），或在输入框中输入需求；顶部「放大文字」可切换大字号。
    - 示例：「我最近头晕」「查看健康预警」「帮我预约门诊」。
@@ -83,7 +87,7 @@ python vrm_demo/vrm_server.py
 
 文字回复先显示，语音再按句请求和播放；某句在线合成或播放失败时，使用浏览器语音补播该句。后端顺序合成句子，口型分析最多并行处理 3 句；每种在线语音服务单次请求最多等待 15 秒。口型时间轴需要额外安装 `av` 并使用仓库内的 Rhubarb 工具；缺少这些组件不影响文字对话和备用口型。
 
-## 开发验证与旧素材工具
+### 开发验证与旧素材工具
 
 ```bash
 python -B -m unittest discover -s tests -v
@@ -97,7 +101,7 @@ npm ci && npm run build:vrm && npm run test:browser
 
 素材脚本仅清理本次创建的临时帧目录，异常退出也会清理，不删除用户已有的 `frames` 目录。
 
-### 动作文件命名约定
+#### 动作文件命名约定
 
 | 文件名 | 触发关键词 |
 |--------|-----------|
@@ -110,7 +114,7 @@ npm ci && npm run build:vrm && npm run test:browser
 
 动作文件缺失不影响对话功能，仅不播放动作。
 
-## 项目结构
+### 项目结构
 
     vrm_demo/
     ├── vrm_server.py           # FastAPI 服务端（对话 + TTS + 动作匹配 + 静态托管）
@@ -127,10 +131,151 @@ npm ci && npm run build:vrm && npm run test:browser
 
 （本系统核心为 `vrm_demo/` 目录。）
 
-## 相关文档
+### 相关文档
 
 - [可选大模型配置与规则回退](docs/model-integration.md)
 - [需求定义书](docs/需求定义书.md)
 - [技术设计文档](docs/技术设计文档.md)
 
 数字人资源分类与 Blender 待机工程说明见 [models/README.md](models/README.md)。页面自动读取 Blender 导出的 8 秒待机动作，支持头发/衣服摆动、自然站姿、自动眨眼及鼠标/触摸视线跟随。
+
+---
+
+## English
+
+> A 3D digital human with natural voice interaction, built as a course project.
+
+### Overview
+
+This web-based digital human demonstrates health inquiries, health-alert acknowledgment, and service booking through voice or text. The browser loads VRM characters on demand. If 3D assets fail to load, chat, voice input, and speech output remain available. Local rules handle the guided workflows; an external language model is optional for general conversation. The demo does not connect to a hospital or messaging service.
+
+The FastAPI backend provides conversation and text-to-speech services. The browser uses Three.js and three-vrm to display interchangeable characters with lip sync and body animation.
+
+### Features
+
+- **VRM characters:** Load a local `.vrm` file through the browser, switch characters, and rotate or zoom the view.
+- **Built-in character selection:** Choose among nine included characters under **帮助与设置 → 演示人员设置** (Help & Settings → Demo Character Settings). Switching adjusts the full-body camera, idle motion, lip sync, and standard bone animations without changing the source models.
+- **Voice and text interaction:** Browser speech recognition or typed input feeds the rule-based dialogue; replies can be spoken aloud.
+- **Guided demo workflows:** Health inquiries, alert acknowledgment, and step-by-step booking work even without a loaded model.
+- **Accessible controls:** Large text and click targets, high contrast, clear status feedback, and quick replies.
+- **Lip sync and expressions:** Rhubarb timelines and audio levels drive mouth shapes, with fallbacks when timeline data is unavailable. Characters also blink, move subtly while idle, and nod while speaking.
+- **Actions:** Greetings can trigger a wave. Local `.vrma` animations can be played manually or selected automatically from dialogue keywords (`greet`, `booking`, `alert`, `confirm`, `thanks`, and `explain`).
+- **Built-in intents:** Health inquiries, alerts, appointments, service questions, greetings, and thanks.
+
+### Technology
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | HTML5, CSS3, JavaScript (ES6+) |
+| 3D rendering | Three.js 0.180.0 with WebGL |
+| VRM loading | @pixiv/three-vrm 3.5.5 |
+| Animation | @pixiv/three-vrm-animation and AnimationMixer |
+| Speech input | Web Speech API; text input remains available when unsupported |
+| Audio analysis | Web Audio API (AnalyserNode) |
+| Backend | FastAPI and Uvicorn |
+| Speech synthesis | edge-tts (Microsoft Azure neural voices) |
+
+### Architecture
+
+The backend handles dialogue and speech synthesis. The frontend handles rendering, lip sync, animations, and interaction.
+
+```text
+Browser (VRM rendering, lip sync, interaction)
+    │  HTTP (JSON) and static assets
+FastAPI server
+    ├── /static/*   Page and scripts
+    ├── /api/chat   Dialogue, guided workflows, and action matching
+    └── /api/tts    Sentence-by-sentence speech synthesis
+```
+
+### Requirements
+
+- Windows 10 or 11
+- Python 3.12 (Anaconda is recommended)
+- A modern browser with ES modules and WebGL2
+- Network access for online speech or an optional external language model. The 3D dependencies are bundled locally; browser speech synthesis is used when online speech is unavailable.
+
+### Installation and startup
+
+On Windows, double-click `run.cmd` in the project root or run it in a terminal. It searches `.venv`, `venv`, `env`, and `virtualenv` in the project, then an active virtual environment, then global `python` or `py -3`. It prints an installation command if dependencies are missing; it does not install them automatically. `run.cmd --check` reports the selected Python without starting the server.
+
+```powershell
+# Install the web application dependencies.
+python -m pip install -r requirements-vrm.txt
+
+# Start the server from the project root.
+python vrm_demo/vrm_server.py
+
+# Open http://localhost:8890/ in a browser.
+```
+
+If you have multiple Python installations, use the interpreter where you installed the dependencies (for example, `D:\anaconda\python.exe`).
+
+### Using the demo
+
+The interface currently uses Chinese labels; English translations below identify the matching controls.
+
+1. Select **开始说话** (Start Speaking; no need to hold the button), or type a request. Use **放大文字** (Enlarge Text) to increase the font size. Example requests in Chinese: “我最近头晕”, “查看健康预警”, or “帮我预约门诊”.
+2. Use the large buttons below the reply to acknowledge an alert, choose a department and time, and confirm a booking. At any booking step, choose or type “取消预约” to cancel.
+3. The default character is `models/characters/AstraYao.vrm`, shown from the front in a full-body view. Drag with the left mouse button to rotate, Shift-drag to pan, and use the wheel to zoom. **恢复全身** (Restore Full Body) resets the view. Select another character in **演示人员设置** (Demo Character Settings), or load a local `.vrm` file.
+4. You can load and play a local `.vrma` animation. Put scene actions in `models/animations/` and name versions `scene_number.vrma`. The app randomly picks among versions for the same scene and avoids repeating the previous version when alternatives exist. Refresh the page after adding an action.
+5. If speech recognition is unsupported, the page shows a message and typed input remains available. The quick actions **问问健康** (Ask About Health), **查看提醒** (View Alerts), and **预约服务** (Book a Service) work without typing; choosing another service starts its workflow.
+
+Alerts, family contact, and appointments are local simulations: they do not send messages or submit data to a hospital. Health information in the demo is not a medical diagnosis.
+
+Text replies appear before speech. Audio is requested and played sentence by sentence; if online synthesis or playback fails for a sentence, the browser attempts to speak that sentence. The backend synthesizes sentences in sequence and analyzes up to three lip-sync segments concurrently. Each online speech service has a 15-second limit per request. Rhubarb timelines require the included Rhubarb tool and the optional `av` package; missing components do not prevent text chat or fallback lip sync.
+
+### Development checks and legacy media tools
+
+```powershell
+python -B -m unittest discover -s tests -v
+node --test tests/test_vrm_frontend.cjs
+npm ci
+npm run build:vrm
+npm run test:browser
+```
+
+Media-processing tests require `numpy` and `opencv-python`. The frontend unit tests use Node's built-in test runner with browser API stubs. The browser smoke test requires the npm development dependencies and a local Edge installation, or a browser specified by `BROWSER_EXECUTABLE`. After changing 3D dependencies, run `npm run build:vrm` to update the browser bundle committed in the repository. Check the actual microphone, online TTS, and visual appearance of each model manually.
+
+The legacy video tool starts from `app.py` (requires Gradio). Its command-line entry point is `python data_preparation_mini.py input_video output_directory`. It creates `data/processed.mp4` and frame-aligned `data/processed.pkl` for `data_preparation_web.py`. It uses FFmpeg, OpenCV, NumPy, PyTorch, `checkpoint/scrfd_2.5g_kps.onnx`, and `checkpoint/face_landmarker_256x256.pt`; later web-media generation also needs DINet model weights. Optional `--matting` uses RVM and additionally needs RobustVideoMatting, its dependencies, CUDA, and `checkpoint/rvm_resnet50.pth`. These weights and environments are not bundled with this project. The media script removes only temporary frame directories it created, including after errors, and preserves any existing user `frames` directory.
+
+#### Action file naming
+
+| Filename | Trigger keywords |
+|----------|------------------|
+| `greet_1.vrma` | 你好 / 您好 / 嗨 / 在吗 / hello |
+| `booking_1.vrma` | 预约 / 挂号 / 门诊 |
+| `thanks_1.vrma` | 谢谢 / 感谢 / 辛苦 |
+| `explain_1.vrma`, `explain_2.vrma` | 健康 / 不舒服 / 症状 / 头晕 / 头疼 / 血压 / 血糖 / 失眠 |
+| `alert_1.vrma` | 预警 / 异常 / 提醒 |
+| `confirm_1.vrma` | 确认 / 知道了 / 联系家人 |
+
+Missing action files do not affect dialogue; the corresponding animations simply do not play.
+
+### Project layout
+
+```text
+vrm_demo/
+├── vrm_server.py           # FastAPI: dialogue, TTS, actions, static files
+└── static/
+    ├── VRMCharacter.html   # Main page
+    └── js/
+        └── VRMCharacter.js # Rendering, lip sync, expressions, actions, UI
+models/
+├── characters/             # VRM characters
+└── animations/             # Scene actions, idle motion, supporting motion data
+docs/
+├── 需求定义书.md            # Requirements document (Chinese)
+└── 技术设计文档.md          # Technical design document (Chinese)
+```
+
+The main application lives in `vrm_demo/`.
+
+### Further documentation
+
+- [Optional language-model configuration and rule fallback](docs/model-integration.md) (Chinese)
+- [Character voices, TTS, and chat configuration](docs/voice-and-tts.md) (Chinese)
+- [Requirements document](docs/需求定义书.md) (Chinese)
+- [Technical design document](docs/技术设计文档.md) (Chinese)
+
+See [models/README.md](models/README.md) for character assets and the Blender idle-animation project. The page automatically reads the exported eight-second idle motion, including hair and clothing sway, a natural standing pose, blinking, and gaze tracking for mouse or touch input.
