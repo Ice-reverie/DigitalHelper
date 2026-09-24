@@ -26,7 +26,12 @@ const elements = {
 const serviceButtons = [...document.querySelectorAll('[data-service]')];
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 
-let motionReduced = false;
+let motionReduced = Boolean(reducedMotion?.matches);
+let hospitalScenes = null;
+let hospitalMood = { light: 0xf5f9ff, rim: 0xc5dcff };
+let environmentLights = null;
+let environmentTime = 0;
+let avatarGround = null;
 const recentMessages = new Map();
 let renderer;
 let scene;
@@ -93,6 +98,23 @@ checkService();
 addMessage('您好，我是小安。点一下「开始说话」，告诉我哪里不舒服，或需要什么帮助。我会陪您一步步完成。', false);
 renderQuickReplies();
 startAvatar();
+startHospitalScenes();
+
+async function startHospitalScenes() {
+  try {
+    const { createHospitalScenes } = await import('./hospital-scenes.js?v=1');
+    hospitalScenes = createHospitalScenes({ reduced: motionReduced, onChange: (mood) => {
+      hospitalMood = mood;
+      if (environmentLights) {
+        environmentLights.keyTarget.setHex(mood.light);
+        environmentLights.rimTarget.setHex(mood.rim);
+      }
+    } });
+  } catch (error) {
+    console.warn('场景切换暂不可用，保留默认背景。', error);
+    document.getElementById('scene-status').textContent = '场景切换暂不可用，请刷新页面重试。';
+  }
+}
 
 async function startAvatar() {
   try {
@@ -121,6 +143,8 @@ function initThree() {
 
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setClearColor(0x000000, 0);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   elements.stage.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
@@ -153,8 +177,13 @@ function initThree() {
   // Bright, neutral fill keeps the face readable while the offset key adds shape.
   scene.add(new THREE.AmbientLight(0xffffff, 1.0));
   const keyLight = new THREE.DirectionalLight(0xfffaf5, 1.4);
-  keyLight.position.set(-1.8, 2.3, 2.4);
+  keyLight.position.set(-.6, 6, 2.4);
   keyLight.target.position.set(0, 1.05, 0);
+  keyLight.castShadow = true;
+  keyLight.shadow.mapSize.set(256, 256);
+  Object.assign(keyLight.shadow.camera, { left: -2, right: 2, top: 3, bottom: -2, near: .1, far: 10 });
+  keyLight.shadow.bias = -.0002;
+  keyLight.shadow.normalBias = .025;
   scene.add(keyLight.target);
   scene.add(keyLight);
   const fillLight = new THREE.DirectionalLight(0xf4f7ff, 0.5);
@@ -163,6 +192,14 @@ function initThree() {
   const rimLight = new THREE.DirectionalLight(0xc5d8ff, 0.3);
   rimLight.position.set(0.8, 1.8, -2);
   scene.add(rimLight);
+  environmentLights = { key: keyLight, rim: rimLight,
+    keyTarget: new THREE.Color(hospitalMood.light), rimTarget: new THREE.Color(hospitalMood.rim) };
+  avatarGround = new THREE.Mesh(new THREE.PlaneGeometry(8, 8),
+    new THREE.ShadowMaterial({ opacity: .13, depthWrite: false }));
+  avatarGround.rotation.x = -Math.PI / 2;
+  avatarGround.receiveShadow = true;
+  avatarGround.visible = false;
+  scene.add(avatarGround);
 
   clock = new THREE.Clock();
   const resizeObserver = new ResizeObserver(resizeStage);
@@ -173,8 +210,21 @@ function initThree() {
     const delta = Math.min(clock.getDelta(), 0.05);
     controls.update();
     updateAvatar(delta);
+    updateEnvironmentLights(delta);
     renderer.render(scene, camera);
   });
+}
+
+function updateEnvironmentLights(delta) {
+  if (!environmentLights) return;
+  if (!motionReduced) environmentTime += delta;
+  const { key, rim, keyTarget, rimTarget } = environmentLights;
+  const blend = motionReduced ? 1 : 1 - Math.exp(-delta * 2);
+  key.color.lerp(keyTarget, blend);
+  rim.color.lerp(rimTarget, blend);
+  key.intensity = 1.4 + (motionReduced ? 0 : Math.sin(environmentTime / 7) * .035);
+  rim.intensity = .3 + (motionReduced ? 0 : Math.sin(environmentTime / 9) * .025);
+  key.position.x = -.6 + (motionReduced ? 0 : Math.sin(environmentTime / 11) * .06);
 }
 
 function resizeStage() {
@@ -228,6 +278,7 @@ function bindUI() {
   const motionButton = document.getElementById('motion-btn');
   const applyMotion = () => {
     document.documentElement.classList.toggle('motion-reduced', motionReduced);
+    hospitalScenes?.setReducedMotion(motionReduced);
     if (motionReduced) { actionRequestId += 1; stopSceneAnimation(); }
     motionButton.setAttribute('aria-pressed', String(motionReduced));
     motionButton.textContent = motionReduced ? '动态已减少' : '减少动态';
@@ -744,6 +795,11 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       idleHands = preparedHands;
       handIdleTime = 0;
       avatarBounds = preparedBounds;
+      if (avatarGround) {
+        vrm.scene.traverse(object => { if (object.isMesh) object.castShadow = true; });
+        avatarGround.position.y = preparedBounds.min.y - .006;
+        avatarGround.visible = true;
+      }
       fitAvatar();
       if (vrm.lookAt) vrm.lookAt.target = gazeTarget;
       nextBlinkAt = performance.now() + 2200;

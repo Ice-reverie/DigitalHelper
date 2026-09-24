@@ -1,95 +1,65 @@
-# 安心健康助手界面检查
+# Hospital scenes — design QA
+
+Date: 2026-09-24
 
 final result: passed
 
-## 目标与范围
+## Visual targets and evidence
 
-用户选择 MotionSites 的 Bionova Biotech 作为视觉参考，同时明确要求保留 3D 数字人位置、降低老年人的使用门槛。本次是现有应用的适配改造，不是营销页面的逐像素复刻。保留白色留白、紫蓝与浅绿分区、柔和玻璃材质和圆角；将营销标题、数据卡替换为数字人舞台、对话及真实可操作的服务入口。
+Source directory: `C:/Users/18246/.codex/generated_images/01a0cd2b-c6e5-7110-bd93-0274925e5e06/`
 
-## 视觉证据
+| Scene | Source visual truth | Final implementation screenshot |
+| --- | --- | --- |
+| 门诊大厅 | `exec-a44591e1-8115-46b4-9b7c-101fdef00730.png` | `output/design-qa/outpatient-desktop-final.png` |
+| 温馨候诊区 | `exec-2fbb50de-02f3-403e-a966-eb17ae8f776d.png` | `output/design-qa/waiting-desktop-final.png` |
+| 智慧导诊 | `exec-39442c07-7dca-444f-9b1e-07e2d95c78b0.png` | `output/design-qa/guidance-desktop-final.png` |
 
-- source visual truth: `docs/ui-review/bionova-reference.png`，来自 https://motionsites.ai/assets/hero-bionova-preview-Sk76d0_D.gif 的浏览器截图。
-- 参考截图 1077×898；去除浏览器图片查看器的黑色留边后，内容裁剪区域 (139,174,939,724)，内容尺寸 800×550。
-- implementation screenshot: `docs/ui-review/desktop.png`，CSS viewport 1280×1000，实际导出像素 1265×988；状态为初次进入、无模型、默认字号。
-- full-view comparison evidence: `docs/ui-review/comparison.png`，将参考内容与实现视口同时并排显示，分别按实际像素等比例缩放至不超过 780 像素宽。参考为完整营销预览，实现为工作界面；不以页面高度或文字行数判断复刻误差。
-- focused region evidence: `docs/ui-review/mobile-large-chat.png`，CSS viewport 390×844，22px 大字号，输入框获焦；检查语音按钮、输入、发送按钮、状态及消息。手机截图导出宽度包含浏览器缩放/滚动条差异，按实际图像等比例展示。
-- `docs/ui-review/mobile.png`：手机默认字号预览。
-- `docs/ui-review/booking-complete.png`：浏览器完成模拟预约的状态记录。
+Implementation URL: `http://127.0.0.1:8890/static/VRMCharacter.html?preview=hospital-3`
 
-## 对照与迭代
+Desktop CSS viewport and source/implementation pixels: 1374 × 1145. Final desktop captures use equal pixel dimensions without rescaling. The combined source/implementation inputs are `output/design-qa/{outpatient,waiting,guidance}-comparison-final.png` (2748 × 1177, including a 32 px label strip). Each combined image was opened and visually reviewed. Focused controls comparisons are `output/design-qa/{outpatient,waiting,guidance}-controls-final.png`; the guidance controls were reviewed at full readable size.
 
-1. P2：手机大字号时标题最后一个字单独换行。将标题后半句设为不可拆分的行内块。复查已改成完整短句换行，无横向溢出。
-2. P2：预约流程尚未完成却显示“办理完成”，其他常用服务按钮仍沿用预约上下文。改为“选择下一步”，常用入口发送新流程请求；快捷回复继续保留当前上下文。
-3. P2：朗读期间快捷回复呈可点击状态但被发送锁忽略。朗读时禁用快捷回复，完成后恢复，避免无反馈点击。
-4. 手机模型区初次留白偏小，增加舞台高度，同时收起非必要的引导短句。桌面实际 WebGL canvas 存在，测得舞台约 541×402；手机独立模型区仍位于对话上方。
-5. 最终在同一对照图内检查参考与实现；另打开大字号操作区截图核对细节。未发现剩余 P0/P1/P2 问题。
+State: selected hospital scene, actual default VRM character, initial production greeting, service controls. The design images include an illustrative user message and a shorter greeting; final screenshots retain the real application's initial state. Character framing was reset with “恢复全身” before the final outpatient capture after interactive zoom testing. A transient zoomed capture was replaced before acceptance.
 
-## 五项视觉检查
+Additional evidence: `scene-picker.png`, `tablet.png`, `mobile.png`, `mobile-large-final.png`, `mobile-small-large.png`, all under `output/design-qa/`. Responsive CSS viewports: 1024 × 768, 390 × 844 and 320 × 740. In-app mobile captures contained a 2/3 scale content region with unused canvas; raw screenshots are retained with `-raw.png`, and that region was cropped and normalized to the tested CSS viewport for visual review. DOM rectangles independently confirmed viewport width, header bounds, stage bounds and absence of horizontal overflow. Desktop comparisons did not use these normalized mobile captures.
 
-- 字体：参考无衬线风格改为系统中文无衬线字体，正文 18px、大字号 22px；正文行高 1.6–1.7，标题有明确层级，未依赖远程字体。
-- 排版：桌面左右双区，左侧数字人及三项服务，右侧对话；手机纵向排列。大字号下服务入口及输入/发送自动堆叠，不裁切主要操作。
-- 色彩：保留柔和紫、蓝、浅绿；主操作改为深绿以提高辨识度。白字/深绿按钮对比度 8.08:1，次要正文/页面 5.79:1，紫色文字/紫底 8.22:1，服务说明/蓝底 6.18:1。
-- 图像：使用 ImageGen 生成的淡紫玻璃背景，1135×1386，装饰集中下方，中央留出真实模型空间；不以假人物替代 3D 渲染。完整背景路径 `vrm_demo/static/assets/companion-stage.png`。
-- 文案：主要动作使用“开始说话”“说完了，发送”“放大文字”；提示点一下而非按住。技术配置集中在折叠的“演示人员设置”，保留模拟业务说明。
+## Findings and comparison history
 
-## 交互与验证
+1. **Resolved P2 — hard, clipped character shadow.** Initial waiting screenshot and `waiting-comparison.png` showed an elongated shadow cut off at the canvas edge. Raised the real Three.js key light, shortened its horizontal offset, reduced shadow map resolution for softness, and lowered shadow opacity. Final waiting/guidance comparisons show a contained soft projection behind the feet.
+2. **Resolved P2 — mobile large-text header and connection label.** At 320 px, header buttons wrapped beyond the 64 px bar; a desktop maximum width also wrapped the connection label into the bubble area. Added a two-row 108 px header at narrow widths when large text is on, and removed the mobile intro width restriction. `mobile-small-large.png` and `mobile-large-final.png` show the corrected layout. DOM header top/bottom at 320 px are 51.38/95.38 within the 108 px bar; document scroll width equals viewport width.
+3. **Resolved P2 — scene-specific panel treatment and microphone hierarchy.** Initial focused guidance comparison showed weak scene identity in the panel and a small microphone. Added the cyan glass rim, a warmer rounded waiting panel and pill-shaped waiting voice button, increased heading and microphone size. Final guidance controls comparison verifies these changes.
 
-- 浏览器实测：预约服务 → 内科 → 明天上午 → 确认预约，得到模拟预约完成回复。
-- 实测字号放大/恢复、文字输入获焦与手机布局。390px viewport 下 scrollWidth 不超过视口；大字号输入框与发送均可见且可操作。
-- 浏览器控制台检查无 error；3D canvas 已初始化。
-- 7 个前端测试通过，覆盖字号切换、无需打字的服务入口、逐句播报降级和口型状态。
-- 16 个 Python 测试通过；JS 语法检查与 git diff --check 通过。
+There are no remaining actionable P0/P1/P2 findings.
 
-## 验证边界
+## Required fidelity surfaces
 
-后续全身适配已实际加载 `models/Lumine.vrm`，未修改原模型文件。桌面、390×844 手机竖屏及放大对话框均已检查，人物头发和鞋子完整可见。手机检查图为 `docs/ui-review/avatar-mobile.png`，放大图为 `docs/ui-review/avatar-enlarged.png`、`docs/ui-review/avatar-mobile-enlarged.png`。默认镜头根据放松站姿的包围盒、FOV 和容器宽高计算，窗口改变及退出放大时重新适配；恢复按钮已接入，放大返回及 Escape 均实测。8 个前端测试通过，含横竖屏视锥包围与占屏比例测试；默认模型接口返回 12159960 字节 glTF 数据。模型本身的 VRM 0.0 视线曲线兼容警告不影响显示；未申请麦克风权限或进行真实录音测试。
+- **Fonts/typography:** Microsoft YaHei/PingFang system Chinese stack, 18 px base, clear bold headings, 22 px large-text mode. Production body copy is intentionally longer than the illustrative mock. Greeting and long database replies scroll inside their bubbles; no text is deleted to fit the design. Source artwork's apparent font weights are approximated with real system fonts rather than rasterized text.
+- **Spacing/layout:** Preserved header, left dialogue, central real 3D character and right service panel. Rounded surfaces, spacing, soft elevation and button press feedback follow the selected directions. Phone layout keeps conversation above the avatar and controls below it. Long appointment option lists have independent scrolling. Tablet control panel remains fully within the viewport.
+- **Colors/tokens:** Blue/white, sage/warm white and aqua/white scenes have independent text, surface, border and action colors. Dark text and nearly opaque reading surfaces remain legible against busy hospital architecture. Active scene buttons have both a border/check and an accessible pressed state.
+- **Image quality/assets:** Three original 1448 × 1086 generated hospital images are locally served. Live avatar/UI are separate layers; background cropping and slow parallax are intentional dynamic adaptations. The actual VRM character and realtime lighting differ from the rendered illustrative character. Icons are unmodified local Bootstrap Icons with the upstream MIT license. No hospital data is encoded into the scenery as application facts.
+- **Copy/content:** Existing business wording and medical/demo boundaries remain. Settings describe the three scenes, loading/failure states and reduced motion. Source-specific marketing text was not added over the actual hospital scene. README identifies the hospital environment as 2.5D imagery and the avatar as realtime 3D; the environment is not a walkable model.
 
-## 实现清单
+## Interaction and regression verification
 
-- [x] 参考视觉与适老化改造
-- [x] 保留真实 3D 舞台与模型加载入口
-- [x] 语音、文字和常用服务入口
-- [x] 字号切换与手机布局
-- [x] 浏览器业务流程检查与回归测试
-- [x] 保存视觉对照与检查记录
+- In-app browser: selected all three scenes; verified matching theme and pressed state, scene persistence after refresh, working settings dialog and return control.
+- Started a SQLite appointment, changed hospital scene, continued selecting 内科 and saw the correct date/slot choices. Cancelled the test flow successfully; no new booking was confirmed.
+- Background DOM transform changed over time in normal mode. “减少动态” returned transform/brightness to neutral and remained stationary during further scene interactions. Returning to normal mode restores ambience; system reduced-motion preference is respected at startup.
+- Checked 390 px mobile, 320 px large text, 1024 px tablet and 1374 px desktop. All required controls remain reachable, and mobile long content scrolls. Temporary viewport override was reset at handoff.
+- Browser console errors: none. Existing three-vrm deprecation warning for `removeUnnecessaryJoints` remains unrelated to these changes.
+- Node: 70/70 passed (60 existing frontend cases + 10 scene selection/motion cases). Covers failed/retried loads, stale concurrent results, stale restoration versus explicit selection, blocked preference storage, and motion limits.
+- Python: 70/70 passed.
+- `git diff --check`: passed. Changes stay on current branch; `docs/` and the original untracked Blender file were preserved.
 
+## Remaining test limits / follow-up polish
 
-## 居中沉浸舞台更新（2026-09-08）
+- Screenshots verify visual states, while DOM pose observations and unit tests verify environmental movement. No video recording or low-end-device frame-time benchmark was produced.
+- Real microphone input, all nine avatar appearances, and external TTS providers were not exhaustively retested for this visual change. Existing automated voice/avatar regression cases passed.
+- Hospital environment remains image-based 2.5D. Full room geometry, spatial navigation and geometrically correct room reflections would be a separate feature.
 
-- 数字人改为中央全宽舞台，镜头随底部操作区实际高度自动重新适配全身；保留放大人物与恢复全身。
-- 桌面对话透明气泡分列人物两侧，每方仅保留最新一条，完整会话可在对话记录弹窗阅读。手机采用顶部宽回复气泡，自身历史消息通过对话记录查看，避免窄栏和遮住脸部。
-- 增加缓慢背景流动、光影漂移、气泡进入和聆听按钮光晕；减少动态开关同时停止装饰动画与人物头部闲置摆动，并响应系统减少动态偏好。
-- 保留大按钮、字号切换、文字输入和服务入口；底部面板按实际高度预留空间，短屏与大字号时可滚动。
-- 本轮浏览器检查：1280×900、390×844 与手机大字号，人物全身、消息记录开关、动态开关、预约入口及取消；浏览器无 error。麦克风实录未测试。
-- 10 项 Node 前端测试、16 项 Python 测试通过；新增测试覆盖最近气泡数量、完整历史保留与动态开关。
-- 本轮截图：docs/ui-review/immersive-desktop.png、docs/ui-review/immersive-mobile.png。此前截图是历史版本。
+## Implementation checklist
 
-
-## 毛玻璃与动态背景调整（2026-09-08）
-
-按用户反馈替换静态背景图：青绿、雾蓝、淡紫三层光幕以 10–15 秒周期位移，叠加两条动态光环及 20 个漂浮光点。消息气泡使用低不透明度渐变、22px 背景模糊、145% 饱和度和内缘高光，底部操作区同步调整为玻璃面板；文字保持实色。不支持 backdrop-filter 的浏览器使用可读的实色回退。
-
-浏览器检查桌面与 390×844 手机全身布局；计算样式确认毛玻璃已生效，减少动态前有 25 个背景动画元素，开启后为 0；控制台无 error，git diff --check 通过。本轮仅修改 HTML/CSS，未改变业务逻辑。截图为 docs/ui-review/glass-desktop.png 与 glass-mobile.png。
-
-
-## 全高度人物与右侧操作区（2026-09-08）
-
-根据用户要求，桌面语音、输入、快捷选择和服务按钮移至右侧玻璃面板；数字人舞台取消底部操作区预留，使用接近完整内容高度。左侧容纳对话气泡与人物视角按钮。相机全身适配余量从 8% 收紧至 3.5%，仍将模型深度计入距离，确保不裁头脚。手机继续底部操作区，避免窄屏横向挤压。
-
-浏览器检查桌面、大字号和 390×844 手机布局，头脚完整可见；1077×898 桌面舞台高 810px，右侧面板与舞台不重叠，大字号没有横向溢出。10 项前端回归测试、git diff --check 通过，浏览器无 error。桌面截图：docs/ui-review/side-desktop.png。
-
-
-## 对话场景动作接入（2026-09-08）
-
-接入 models/animations 中七个原始 VRMA 文件，未修改动作资产。白名单资源接口保留原 idle 路由；前端缓存动作、按连续场景去重，采用 0.3 秒进入/退出过渡。动作结束恢复全部标准骨骼及位移；过滤嘴型、眼球及视线轨道，wink 独占眨眼期间，其余时间恢复自然眨眼。
-
-浏览器通过问候、夸奖、健康查询、预警、确认预警、预约、取消预约、感谢逐一检查回复和渲染，结束后回到待机，控制台无 error。减少动态时再次问候，页面模型状态仍为“自然待机”。18 项前端测试、21 项 Python 测试通过，覆盖去重、资源白名单和缺失文件、异步旧请求丢弃、表情轨道归属及动作结束清理。实时麦克风输入与外部陌生 VRMA 未作完整兼容性测试。
-
-
-## 动作抽搐排查与修复（2026-09-08）
-
-根因：待机每帧重写可见骨骼，Three.js PropertyMixer 对重复采样值会跳过写入，导致动作保持段突然落回待机；过渡对同一骨骼的修改也受相同缓存冲突影响。使用项目同版本 Three.js 0.180.0 复现，常量 1 rad 轨道在外部复位后实际输出 [1,0,0,0,0,0]。
-
-修复：独立代理骨架供 AnimationMixer 采样，每帧显式发布完整姿态和表情，再应用过渡。用真实 Three.js 对生产播放函数验证，保持帧输出 [1,1,1,1,1,1]，误差约 2.18e-8 rad，结束后释放播放状态。19 项前端测试通过，包含保持段回归；浏览器问候场景无 error。
-
-资源观察：alert.vrma 的 RightLowerArm 在 0.0417–0.0833 秒变化约 28.11 度，本身具有较快的起始运动，这与上述缓存冲突是不同问题；本轮未修改原动作文件，也未承诺所有原始动作的急转已经消除。
+- [x] Three scene choices in existing demo settings and browser persistence.
+- [x] Load-before-commit, retry, stale request protection and failure messages.
+- [x] Live parallax, gentle ambient lighting, VRM shadow and scene-specific theme.
+- [x] Reduced motion, hidden-tab pause and responsive/large-text checks.
+- [x] Source/implementation visual comparison, fixes, recapture and final review.
+- [x] Tests, README and asset provenance.
