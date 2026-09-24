@@ -1,6 +1,6 @@
 // The conversation starts even when the optional 3D bundle cannot load.
 let THREE = globalThis.THREE || null;
-let GLTFLoader, OrbitControls, VRMLoaderPlugin, VRMUtils;
+let GLTFLoader, OrbitControls, RoomEnvironment, VRMLoaderPlugin, VRMUtils;
 let VRMExpression, VRMExpressionMorphTargetBind, createVRMAnimationClip, VRMAnimationLoaderPlugin;
 
 
@@ -32,6 +32,24 @@ let hospitalMood = { light: 0xf5f9ff, rim: 0xc5dcff };
 let environmentLights = null;
 let environmentTime = 0;
 let avatarGround = null;
+let activeHospitalRoom = null;
+const hospitalRooms = new Map();
+const hospitalRoomPromises = new Map();
+let hospitalSceneCatalog = {};
+const hospitalRoomLoaders = {
+  outpatient3d: () => import('./outpatient-room.js?v=5').then(m => m.createOutpatientRoom(THREE)),
+  waiting3d: () => import('./waiting-room.js?v=2').then(m => m.createWaitingRoom(THREE)),
+  guidance3d: () => import('./guidance-room.js?v=2').then(m => m.createGuidanceRoom(THREE)),
+};
+let roomEnvironment = null;
+let hospitalRenderMode = 'image';
+let selectedHospitalId = 'outpatient3d';
+let avatarPlacement = null;
+let footContact = null;
+let avatarShadowProxy = null;
+let tuneAvatarSurface = () => {};
+let createFootContact = () => null;
+let createAvatarShadowProxy = () => null;
 const recentMessages = new Map();
 let renderer;
 let scene;
@@ -44,7 +62,7 @@ let modelLoadId = 0;
 let idleAnimation = null;
 let defaultAvatar = false;
 let avatarLoading = false;
-const DEFAULT_AVATAR = {id:'AstraYao', label:'AstraYao（默认）', profile:'standard'};
+const DEFAULT_AVATAR = {id:'schoolBoy', label:'校服男生（默认）', profile:'standard', voice_gender:'male'};
 const DEFAULT_AVATAR_STORAGE_KEY = 'anxin.defaultAvatar';
 let currentAvatarName = DEFAULT_AVATAR.label;
 let currentAvatarId = DEFAULT_AVATAR.id;
@@ -102,13 +120,16 @@ startHospitalScenes();
 
 async function startHospitalScenes() {
   try {
-    const { createHospitalScenes } = await import('./hospital-scenes.js?v=1');
-    hospitalScenes = createHospitalScenes({ reduced: motionReduced, onChange: (mood) => {
+    const { createHospitalScenes, HOSPITAL_SCENES } = await import('./hospital-scenes.js?v=hospital-3d-1');
+    hospitalSceneCatalog = HOSPITAL_SCENES;
+    hospitalScenes = createHospitalScenes({ reduced: motionReduced, onChange: (mood, id) => {
       hospitalMood = mood;
+      selectedHospitalId = id;
       if (environmentLights) {
         environmentLights.keyTarget.setHex(mood.light);
         environmentLights.rimTarget.setHex(mood.rim);
       }
+      syncHospitalRenderer();
     } });
   } catch (error) {
     console.warn('场景切换暂不可用，保留默认背景。', error);
@@ -116,11 +137,112 @@ async function startHospitalScenes() {
   }
 }
 
+async function loadHospitalRoom(id) {
+  if (hospitalRooms.has(id)) return hospitalRooms.get(id);
+  if (!hospitalRoomPromises.has(id)) {
+    const pending = hospitalRoomLoaders[id]().then(room => {
+      room.group.visible = false;
+      scene.add(room.group);
+      hospitalRooms.set(id, room);
+      return room;
+    }).catch(error => { hospitalRoomPromises.delete(id); throw error; });
+    hospitalRoomPromises.set(id, pending);
+  }
+  return hospitalRoomPromises.get(id);
+}
+
+async function syncHospitalRenderer() {
+  const id = selectedHospitalId;
+  const definition = hospitalSceneCatalog[id];
+  const useRoom = Object.hasOwn(hospitalRoomLoaders, id);
+  const compare = document.getElementById('scene-compare-btn');
+  compare.hidden = !definition?.comparison;
+  compare.textContent = useRoom ? '查看原图场景' : '查看3D场景';
+  if (!useRoom) {
+    if (hospitalRenderMode === 'three') applyHospitalRenderer(false);
+    return;
+  }
+  // While a different room loads, show that scene's matching image fallback.
+  // Late loads are cached hidden and cannot replace a newer selection.
+  if (activeHospitalRoom !== hospitalRooms.get(id) && hospitalRenderMode === 'three') applyHospitalRenderer(false);
+  const status = document.getElementById('scene-status');
+  if (!renderer || !scene) {
+    status.textContent = '3D渲染暂不可用，当前显示原图场景；文字与语音仍可使用。';
+    return;
+  }
+  const name = definition?.name || '医院场景';
+  const preferenceUnsaved = status.textContent.includes('无法保存');
+  try {
+    if (!hospitalRooms.has(id)) status.textContent = `正在载入${name}的立体空间…`;
+    const room = await loadHospitalRoom(id);
+    if (selectedHospitalId === id) {
+      activeHospitalRoom = room;
+      applyHospitalRenderer(true);
+      status.textContent = `当前场景：${name}。` + (preferenceUnsaved
+        ? '当前浏览器无法保存，下次打开将使用默认场景。' : '可在演示人员设置中对照原图。');
+    }
+  } catch (error) {
+    console.warn('立体场景暂不可用，保留图片场景。', error);
+    if (selectedHospitalId === id) status.textContent = `${name}暂时无法载入，已保留图片场景。请再次选择此场景重试。`;
+  }
+}
+
+function applyHospitalRenderer(useRoom) {
+  hospitalRenderMode = useRoom ? 'three' : 'image';
+  document.documentElement.dataset.renderMode = hospitalRenderMode;
+  for (const room of hospitalRooms.values()) room.group.visible = useRoom && room === activeHospitalRoom;
+  if (avatarShadowProxy) avatarShadowProxy.group.visible = useRoom;
+  if (footContact?.group) footContact.group.visible = useRoom;
+  if (avatarGround) avatarGround.visible = !useRoom && Boolean(currentVrm);
+  if (environmentLights) environmentLights.ground.visible = !useRoom;
+  if (scene) scene.background = useRoom ? new THREE.Color(0xeaf3fa) : null;
+  if (controls) controls.enablePan = !useRoom;
+  if (currentVrm && avatarPlacement) {
+    currentVrm.scene.position.copy(avatarPlacement.position);
+    if (useRoom) {
+      currentVrm.scene.position.y -= avatarBounds.min.y;
+      currentVrm.scene.position.x -= avatarPlacement.center.x;
+      currentVrm.scene.position.z -= avatarPlacement.center.z;
+      footContact?.update(activeHospitalRoom?.floorY ?? 0);
+    }
+  }
+  resizeStage();
+}
+
+function renderHospitalFrame() {
+  if (hospitalRenderMode !== 'three') {
+    renderer.autoClear = true;
+    renderer.toneMapping = THREE.NoToneMapping;
+    camera.layers.set(0);
+    renderer.render(scene, camera);
+    return;
+  }
+  // Two lighting passes share one projection and one depth buffer. Room lamps
+  // do not bleach the toon face, while the avatar can still be occluded by the
+  // counter. Invisible skinned proxies cast its shadow in the room pass.
+  const background = scene.background;
+  renderer.autoClear = false;
+  renderer.clear();
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  camera.layers.set(1);
+  renderer.render(scene, camera);
+  scene.background = null;
+  renderer.toneMapping = THREE.NoToneMapping;
+  camera.layers.set(0);
+  renderer.render(scene, camera);
+  scene.background = background;
+  camera.layers.enable(1);
+}
+
 async function startAvatar() {
   try {
     if (!THREE) {
-      const libraries = await import('./vrm-dependencies.js');
-      ({THREE, GLTFLoader, OrbitControls, VRMLoaderPlugin, VRMUtils,
+      const [libraries, surfaces] = await Promise.all([
+        import('./vrm-dependencies.js?v=outpatient-3d'), import('./avatar-surface.js?v=3'),
+      ]);
+      ({tuneAvatarSurface, createFootContact, createAvatarShadowProxy} = surfaces);
+      ({THREE, GLTFLoader, OrbitControls, RoomEnvironment, VRMLoaderPlugin, VRMUtils,
         VRMExpression, VRMExpressionMorphTargetBind, createVRMAnimationClip,
         VRMAnimationLoaderPlugin} = libraries);
     }
@@ -148,6 +270,15 @@ function initThree() {
   elements.stage.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
+  if (RoomEnvironment) {
+    const generator = new THREE.PMREMGenerator(renderer);
+    const environment = new RoomEnvironment();
+    roomEnvironment = generator.fromScene(environment, .025);
+    environment.dispose();
+    generator.dispose();
+    scene.environment = roomEnvironment.texture;
+    scene.environmentIntensity = .28;
+  }
   gazeTarget = new THREE.Object3D();
   scene.add(gazeTarget);
   window.addEventListener('pointermove', (event) => {
@@ -177,22 +308,24 @@ function initThree() {
   // Bright, neutral fill keeps the face readable while the offset key adds shape.
   scene.add(new THREE.AmbientLight(0xffffff, 1.0));
   const keyLight = new THREE.DirectionalLight(0xfffaf5, 1.4);
-  keyLight.position.set(-.6, 6, 2.4);
+  keyLight.position.set(-1.5, 2.5, 4);
   keyLight.target.position.set(0, 1.05, 0);
-  keyLight.castShadow = true;
-  keyLight.shadow.mapSize.set(256, 256);
-  Object.assign(keyLight.shadow.camera, { left: -2, right: 2, top: 3, bottom: -2, near: .1, far: 10 });
-  keyLight.shadow.bias = -.0002;
-  keyLight.shadow.normalBias = .025;
   scene.add(keyLight.target);
   scene.add(keyLight);
   const fillLight = new THREE.DirectionalLight(0xf4f7ff, 0.5);
-  fillLight.position.set(2, 1.4, 1.6);
+  fillLight.position.set(1.8, 1.8, 4);
   scene.add(fillLight);
   const rimLight = new THREE.DirectionalLight(0xc5d8ff, 0.3);
   rimLight.position.set(0.8, 1.8, -2);
   scene.add(rimLight);
-  environmentLights = { key: keyLight, rim: rimLight,
+  const groundLight = new THREE.DirectionalLight(0xffffff, .35);
+  groundLight.position.set(.5, 6, 1.8);
+  groundLight.castShadow = true;
+  groundLight.shadow.mapSize.set(512, 512);
+  Object.assign(groundLight.shadow.camera, { left: -2, right: 2, top: 3, bottom: -2, near: .1, far: 12 });
+  groundLight.shadow.normalBias = .015;
+  scene.add(groundLight);
+  environmentLights = { key: keyLight, rim: rimLight, ground: groundLight,
     keyTarget: new THREE.Color(hospitalMood.light), rimTarget: new THREE.Color(hospitalMood.rim) };
   avatarGround = new THREE.Mesh(new THREE.PlaneGeometry(8, 8),
     new THREE.ShadowMaterial({ opacity: .13, depthWrite: false }));
@@ -205,13 +338,20 @@ function initThree() {
   const resizeObserver = new ResizeObserver(resizeStage);
   resizeObserver.observe(elements.stage);
   resizeStage();
+  syncHospitalRenderer();
 
   renderer.setAnimationLoop(() => {
     const delta = Math.min(clock.getDelta(), 0.05);
+    if (document.hidden) return;
     controls.update();
     updateAvatar(delta);
     updateEnvironmentLights(delta);
-    renderer.render(scene, camera);
+    if (hospitalRenderMode === 'three') {
+      footContact?.update(activeHospitalRoom?.floorY ?? 0);
+      avatarShadowProxy?.update();
+      activeHospitalRoom?.tick(delta, { reduced: motionReduced || document.getElementById('help-dialog').open });
+    }
+    renderHospitalFrame();
   });
 }
 
@@ -224,7 +364,7 @@ function updateEnvironmentLights(delta) {
   rim.color.lerp(rimTarget, blend);
   key.intensity = 1.4 + (motionReduced ? 0 : Math.sin(environmentTime / 7) * .035);
   rim.intensity = .3 + (motionReduced ? 0 : Math.sin(environmentTime / 9) * .025);
-  key.position.x = -.6 + (motionReduced ? 0 : Math.sin(environmentTime / 11) * .06);
+  key.position.x = -1.5 + (motionReduced ? 0 : Math.sin(environmentTime / 11) * .035);
 }
 
 function resizeStage() {
@@ -239,6 +379,13 @@ function resizeStage() {
 
 function fitAvatar() {
   if (!avatarBounds || !camera || !controls) return;
+  if (hospitalRenderMode === 'three') { fitHospitalView(); return; }
+  camera.clearViewOffset?.();
+  camera.fov = 30;
+  controls.minAzimuthAngle = -Infinity;
+  controls.maxAzimuthAngle = Infinity;
+  controls.minPolarAngle = 0;
+  controls.maxPolarAngle = Math.PI;
   const size = avatarBounds.getSize(new THREE.Vector3());
   const center = avatarBounds.getCenter(new THREE.Vector3());
   const verticalFov = THREE.MathUtils.degToRad(camera.fov);
@@ -254,6 +401,42 @@ function fitAvatar() {
   controls.minDistance = Math.max(size.z / 2 + 0.1, size.y * 0.6);
   controls.maxDistance = distance * 1.7;
   controls.update();
+}
+
+function fitHospitalView() {
+  const width = elements.stage.clientWidth;
+  const height = elements.stage.clientHeight;
+  const size = avatarBounds.getSize(new THREE.Vector3());
+  const compact = width <= 760;
+  const dockHeight = document.querySelector('.interaction-dock').getBoundingClientRect().height;
+  const top = compact ? 165 : 36;
+  const bottom = compact ? dockHeight + 72 : 50;
+  const available = Math.max(40, height - top - bottom);
+  const occupancy = Math.min(.87, available / height * .94);
+  camera.fov = 50;
+  const distance = Math.max(size.y / (2 * Math.tan(THREE.MathUtils.degToRad(25)) * occupancy), 1.95);
+  // Keep the viewer near the avatar's eyes with a level optical axis. Framing
+  // around the waist put the viewer below the face even with a downward tilt.
+  const floorY = activeHospitalRoom?.floorY ?? 0;
+  const eyeY = floorY + size.y * .90;
+  controls.target.set(0, eyeY, 0);
+  camera.position.set(0, eyeY, distance);
+  camera.near = .05;
+  camera.far = 80;
+  // Shift the framing down without tilting the room: retain the full body and
+  // mobile UI clearance while the perspective remains at conversation height.
+  const bodyCenterY = floorY + size.y * .5;
+  const eyeOffset = (eyeY - bodyCenterY) * height / (2 * distance * Math.tan(THREE.MathUtils.degToRad(25)));
+  camera.setViewOffset(width, height, width * (compact ? 0 : .045),
+    height * .5 - (top + available * .5) + eyeOffset, width, height);
+  controls.minDistance = distance * .80;
+  controls.maxDistance = distance * 1.15;
+  controls.minAzimuthAngle = -.14;
+  controls.maxAzimuthAngle = .14;
+  controls.minPolarAngle = Math.PI / 2 - .20;
+  controls.maxPolarAngle = Math.PI / 2 + .06;
+  controls.update();
+  camera.updateProjectionMatrix();
 }
 
 function bindUI() {
@@ -300,6 +483,9 @@ function bindUI() {
     const dock = document.querySelector('.interaction-dock');
     new ResizeObserver(() => {
       document.documentElement.style.setProperty('--dock-height', dock.getBoundingClientRect().height + 'px');
+      // The 3D canvas fills the stage, so growing quick replies no longer resize
+      // that canvas. Reframe explicitly to keep the feet above mobile controls.
+      if (hospitalRenderMode === 'three') fitAvatar();
     }).observe(dock);
   }
   elements.loadButton.addEventListener('click', () => elements.fileInput.click());
@@ -331,6 +517,12 @@ function bindUI() {
     elements.fontSizeButton.textContent = large ? '恢复字号' : '放大文字';
   });
   document.getElementById('reset-view-btn').addEventListener('click', fitAvatar);
+  document.getElementById('scene-compare-btn').addEventListener('click', async () => {
+    const target = hospitalSceneCatalog[selectedHospitalId]?.comparison;
+    if (target && await hospitalScenes?.selection.select(target)) {
+      document.getElementById('help-dialog').close();
+    }
+  });
 
 }
 
@@ -600,7 +792,8 @@ function voicePreference(id = currentAvatarId) {
 function avatarVoice() {
   const selected = document.getElementById('avatar-voice-select').value;
   const preference = ['male','female','auto'].includes(selected) ? selected : voicePreference();
-  const preset = availableAvatars.find(v => v.id === currentAvatarId)?.voice_gender || 'female';
+  const preset = availableAvatars.find(v => v.id === currentAvatarId)?.voice_gender
+    || (currentAvatarId === DEFAULT_AVATAR.id ? DEFAULT_AVATAR.voice_gender : 'female');
   return {avatar_id:currentAvatarId || null, voice_gender:preference === 'auto' ? preset : preference};
 }
 
@@ -640,8 +833,8 @@ function showDefaultAvatarPreference() {
   const avatar = availableAvatars.find(v => v.id === saved);
   document.getElementById('default-avatar-status').textContent = saved
     ? avatar ? `本浏览器默认形象：${avatar.id}。下次打开或刷新页面生效。`
-      : '保存的默认人物暂不可用，下次打开将使用 AstraYao。'
-    : '本浏览器默认形象：AstraYao（系统默认）。';
+      : '保存的默认人物暂不可用，下次打开将使用校服男生。'
+    : '本浏览器默认形象：校服男生（系统默认）。';
 }
 
 function saveDefaultAvatar(id) {
@@ -662,7 +855,9 @@ async function initializeDefaultAvatar() {
   // the server and removed files fall back to the hard-coded system default.
   if (saved) await loadAvatarCatalog();
   const selected = availableAvatars.find(v => v.id === saved) || DEFAULT_AVATAR;
-  if (renderer) loadVrm(selected.id === DEFAULT_AVATAR.id ? '/api/avatar' : `/api/avatars/${encodeURIComponent(selected.id)}`, selected.label, () => {}, selected);
+  // A model-specific URL avoids a cached /api/avatar response from an older
+  // system default displaying a different character under the new label.
+  if (renderer) loadVrm(`/api/avatars/${encodeURIComponent(selected.id)}`, selected.label, () => {}, selected);
   if (!saved) await loadAvatarCatalog();
 }
 
@@ -760,6 +955,7 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       VRMUtils.removeUnnecessaryJoints(gltf.scene);
       VRMUtils.rotateVRM0(vrm);
       await adaptAvatar(vrm, gltf, profile);
+      tuneAvatarSurface(vrm, avatar?.id || (url === '/api/avatar' ? DEFAULT_AVATAR.id : ''));
       if (loadId !== modelLoadId) { VRMUtils.deepDispose(gltf.scene); return; }
       const leftArm = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
       const rightArm = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
@@ -775,6 +971,8 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       const preparedBounds = new THREE.Box3().setFromObject(vrm.scene, true);
       const preparedHands = prepareIdleHands(vrm);
       stopSceneAnimation();
+      footContact?.dispose();
+      if (avatarShadowProxy) { scene.remove(avatarShadowProxy.group); avatarShadowProxy.dispose(); }
       if (currentVrm) { scene.remove(currentVrm.scene); VRMUtils.deepDispose(currentVrm.scene); }
       // Also cancel speech started while this model was still downloading.
       stopCurrentSpeech();
@@ -795,12 +993,20 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       idleHands = preparedHands;
       handIdleTime = 0;
       avatarBounds = preparedBounds;
+      avatarPlacement = { position: vrm.scene.position.clone(), center: preparedBounds.getCenter(new THREE.Vector3()) };
       if (avatarGround) {
         vrm.scene.traverse(object => { if (object.isMesh) object.castShadow = true; });
         avatarGround.position.y = preparedBounds.min.y - .006;
-        avatarGround.visible = true;
+        avatarGround.visible = hospitalRenderMode !== 'three';
       }
-      fitAvatar();
+      footContact = createFootContact(THREE, vrm);
+      if (footContact?.group) scene.add(footContact.group);
+      avatarShadowProxy = createAvatarShadowProxy(THREE, vrm);
+      if (avatarShadowProxy) {
+        scene.add(avatarShadowProxy.group);
+        avatarShadowProxy.group.visible = hospitalRenderMode === 'three';
+      }
+      applyHospitalRenderer(hospitalRenderMode === 'three');
       if (vrm.lookAt) vrm.lookAt.target = gazeTarget;
       nextBlinkAt = performance.now() + 2200;
       blinking = false;

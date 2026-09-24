@@ -20,7 +20,7 @@ def read_vrm(path):
 
 class IdleAssetsTests(unittest.TestCase):
     def test_default_character_has_valid_expression_bindings(self):
-        model, _ = read_vrm(MODELS / 'characters/AstraYao.vrm')
+        model, _ = read_vrm(MODELS / 'characters/schoolBoy.vrm')
         groups = model['extensions']['VRM']['blendShapeMaster']['blendShapeGroups']
         self.assertTrue({'a', 'i', 'u', 'e', 'o', 'blink'} <= {g['presetName'] for g in groups})
         for group in groups:
@@ -49,7 +49,7 @@ class IdleAssetsTests(unittest.TestCase):
     def test_default_routes_use_classified_assets(self):
         avatar = asyncio.run(vrm_server.default_avatar())
         idle = asyncio.run(vrm_server.default_idle())
-        self.assertEqual(Path(avatar.path).resolve(), (MODELS / 'characters/AstraYao.vrm').resolve())
+        self.assertEqual(Path(avatar.path).resolve(), (MODELS / 'characters/schoolBoy.vrm').resolve())
         self.assertEqual(Path(idle.path).resolve(), (MODELS / 'animations/Lumine_idle.json').resolve())
         self.assertTrue(Path(avatar.path).is_file())
         self.assertTrue(Path(idle.path).is_file())

@@ -1,8 +1,11 @@
 // Scene selection is independent of chat, voice and the optional avatar renderer.
 export const HOSPITAL_SCENES = Object.freeze({
-  outpatient: { name: '门诊大厅', image: './assets/scenes/outpatient.png', light: 0xf5f9ff, rim: 0xc5dcff },
-  waiting: { name: '温馨候诊区', image: './assets/scenes/waiting.png', light: 0xfff6e7, rim: 0xd1e8d9 },
-  guidance: { name: '智慧导诊', image: './assets/scenes/guidance.png', light: 0xefffff, rim: 0xbde9ed },
+  outpatient3d: { name: '门诊大厅 · 3D', image: './assets/scenes/outpatient.png', renderer: 'three', comparison: 'outpatient', light: 0xfffaf5, rim: 0xd5e7ff },
+  waiting3d: { name: '温馨候诊区 · 3D', image: './assets/scenes/waiting.png', renderer: 'three', comparison: 'waiting', light: 0xfff6e7, rim: 0xd1e8d9 },
+  guidance3d: { name: '智慧导诊 · 3D', image: './assets/scenes/guidance.png', renderer: 'three', comparison: 'guidance', light: 0xefffff, rim: 0xbde9ed },
+  outpatient: { name: '门诊大厅 · 原图', image: './assets/scenes/outpatient.png', comparison: 'outpatient3d', light: 0xf5f9ff, rim: 0xc5dcff },
+  waiting: { name: '温馨候诊区 · 原图', image: './assets/scenes/waiting.png', comparison: 'waiting3d', light: 0xfff6e7, rim: 0xd1e8d9 },
+  guidance: { name: '智慧导诊 · 原图', image: './assets/scenes/guidance.png', comparison: 'guidance3d', light: 0xefffff, rim: 0xbde9ed },
 });
 export const SCENE_STORAGE_KEY = 'anxin.scene';
 
@@ -43,10 +46,10 @@ export class SceneSelection {
   async restore() {
     let id;
     try { id = this.read(); } catch { /* Storage may be unavailable in private mode. */ }
-    if (!Object.hasOwn(HOSPITAL_SCENES, id)) id = 'outpatient';
+    if (!Object.hasOwn(HOSPITAL_SCENES, id)) id = 'outpatient3d';
     const pending = this.select(id, false);
     const request = this.request;
-    if (!await pending && request === this.request && id !== 'outpatient') await this.select('outpatient', false);
+    if (!await pending && request === this.request && id !== 'outpatient3d') await this.select('outpatient3d', false);
   }
 }
 
@@ -116,7 +119,6 @@ export function createHospitalScenes({ reduced = false, onChange = () => {} } = 
       removals.add(timer);
       root.dataset.scene = id;
       choices.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.sceneChoice === id)));
-      onChange(HOSPITAL_SCENES[id]);
     },
     notify: (state, id) => {
       picker.setAttribute('aria-busy', String(state === 'loading'));
@@ -126,6 +128,10 @@ export function createHospitalScenes({ reduced = false, onChange = () => {} } = 
         state === 'error' ? `${name}暂时无法载入，已保留原场景。请再点一次重试。` :
         state === 'unsaved' ? `已切换到${name}；当前浏览器无法保存，下次打开将使用默认场景。` :
         `当前场景：${name}。选择会在本浏览器保留。`;
+      // Notify the renderer after the image status, including an explicit
+      // re-selection. A failed optional 3D load can then retry and report its
+      // own loading/error state without being overwritten by image readiness.
+      if (state === 'ready' || state === 'unsaved') onChange(HOSPITAL_SCENES[id], id);
     },
   });
 
@@ -141,7 +147,7 @@ export function createHospitalScenes({ reduced = false, onChange = () => {} } = 
     const delta = lastTime === null ? 0 : Math.min((now - lastTime) / 1000, .08);
     lastTime = now;
     // Keep the settings dialog still while the user makes a choice.
-    if (!help.open) {
+    if (!help.open && root.dataset.renderMode !== 'three') {
       seconds += delta;
       const alpha = 1 - Math.exp(-delta * 3);
       pointer.x += (target.x - pointer.x) * alpha;

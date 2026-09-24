@@ -16,7 +16,7 @@
 
 - **VRM 模型加载**：通过网页文件选择器加载本地 `.vrm` 三维模型，支持随时更换，鼠标旋转缩放查看。
 - **内置人物切换**：「帮助与设置 → 演示人员设置」可选择当前 9 个模型，切换时自动调整全身视角，并适配待机、口型和标准骨骼动作；原始模型文件保持不变。
-- **医院场景切换**：同一设置区可选择蓝白「门诊大厅」、浅绿「温馨候诊区」和青白「智慧导诊」，场景、界面配色和人物灯光一起切换，并记住本浏览器的选择。
+- **医院场景切换**：同一设置区可选择蓝白「门诊大厅」、浅绿木色「温馨候诊区」和青白「智慧导诊」三个实时 3D 空间，并记住本浏览器的选择。每个场景都保留原图对照。
 - **自然语音交互**：浏览器语音识别或文字输入 → 规则式问答 → 语音播报。
 - **完整演示流程**：健康查询、预警确认、分步预约均可在未加载模型时体验。
 - **适老化界面**：大字号、大点击区域、高对比度、明确状态反馈与快捷选项。
@@ -80,13 +80,21 @@ python vrm_demo/vrm_server.py
 1. 打开页面后，可直接点击「开始说话」（不用按住），或在输入框中输入需求；顶部「放大文字」可切换大字号。
    - 示例：「我最近头晕」「查看健康预警」「帮我预约门诊」。
 2. 使用回复下方的大按钮完成预警确认、选择科室、选择时间和最终确认；预约任意步骤都可选择或输入「取消预约」。
-3. 页面默认加载 `models/characters/AstraYao.vrm`，按人物尺寸适配正面全身；鼠标左键拖动可旋转，Shift + 左键拖动可平移，滚轮可缩放；点「恢复全身」回到默认视角。若需更换形象，在「演示人员设置」中选择其他 `.vrm` 文件。
+3. 页面默认加载校服男生 `models/characters/schoolBoy.vrm`（跟随人物时使用男声），按人物尺寸适配正面全身；鼠标左键拖动可旋转，Shift + 左键拖动可平移，滚轮可缩放；点「恢复全身」回到默认视角。若需更换形象，在「演示人员设置」中选择其他 `.vrm` 文件。
 4. 可继续选择本地 `.vrma` 动作，七个场景动作统一放在 `models/animations/`，使用 `场景_序号.vrma` 命名。每次回复从同场景版本中随机选择；有多个版本时避免连续播放同一版本。添加版本后刷新页面即可使用。
 5. 若当前浏览器不支持语音识别，页面会明确提示，文字输入仍可正常使用。
 6. 「问问健康」「查看提醒」「预约服务」无需打字即可使用；点击另一项常用服务会切换到该服务的新流程。
 7. 在「帮助与设置 → 演示人员设置 → 场景与氛围」点击缩略图更换医院场景；切换保留当前对话、预约步骤和人物。背景加载失败时保留原场景，可再次点击重试。
 
-医院空间使用生成图像与独立前景组成 2.5D 视差效果，中央人物仍由 Three.js 实时渲染；包含缓慢的环境移动、鼠标视差、明暗变化、人物灯光过渡、动态投影和按钮按压反馈。医院背景不是可以自由转身或行走的完整三维模型。环境动画最多每秒更新 30 次，后台标签页暂停；「减少动态」以及系统的减少动态偏好可关闭环境移动、光照起伏和界面动画。场景素材为虚构演示医院，不代表真实医院的布局或导诊信息。
+三个医院场景均用 Three.js 构建真实空间，人物和建筑共享相机、地面与深度；各自包含建筑反射、人物投影和鞋底接触阴影。人物面部使用独立柔和灯光。在「帮助与设置 → 演示人员设置」点击「查看原图场景 / 查看3D场景」可比较同一场景；切换后会关闭设置窗口，方便查看画面。3D 模式限制旋转和缩放范围、不支持平移，以保持主构图。
+
+- **门诊大厅**：蓝白前台、玻璃走廊和缓慢开合的自动门。
+- **温馨候诊区**：浅绿座椅、木色前台、暖白灯光、缓慢开合的诊室门与轻微植物摆动。
+- **智慧导诊**：青色弧面玻璃、环形顶灯、落地窗和缓慢移动的服务屏指示。
+
+场景按需加载并复用；快速切换不会被旧加载结果覆盖，加载失败时显示对应原图并可重试。「减少动态」可暂停环境动效，后台标签页暂停更新。原图模式保留 2.5D 视差效果。实时材质、光照和细节并非原图的逐像素复刻；场景均为虚构演示医院，不代表真实医院布局或导诊信息。
+
+系统默认人物为校服男生；浏览器中明确设置过的个人默认人物仍优先。可在「演示人员设置」点击「恢复系统默认」，刷新后使用校服男生。模型使用对应名称的资源地址，避免旧默认人物的浏览器缓存影响显示。
 
 > 说明：预警、联系家人和预约均为本地模拟流程，不会真实发送消息或向医院提交数据。
 
@@ -102,7 +110,7 @@ MySQL 连接、建表和测试库重置说明见 [数据库接入说明](docs/da
 
 ```bash
 python -B -m unittest discover -s tests -v
-node --test tests/test_vrm_frontend.cjs tests/test_hospital_scenes.cjs
+node --test tests/test_vrm_frontend.cjs tests/test_hospital_scenes.cjs tests/test_avatar_surface.cjs tests/test_hospital_rooms.cjs
 npm ci && npm run build:vrm && npm run test:browser
 ```
 
@@ -167,6 +175,7 @@ The FastAPI backend provides conversation and text-to-speech services. The brows
 
 - **VRM characters:** Load a local `.vrm` file through the browser, switch characters, and rotate or zoom the view.
 - **Built-in character selection:** Choose among nine included characters under **帮助与设置 → 演示人员设置** (Help & Settings → Demo Character Settings). Switching adjusts the full-body camera, idle motion, lip sync, and standard bone animations without changing the source models.
+- **Hospital environments:** Choose among three code-built 3D rooms: the outpatient hall, warm waiting area, and turquoise guidance center. Moving doors, subtle plant or display motion, architectural reflections and avatar ground contact provide depth. Each room has an original-image comparison. Orbit and zoom are constrained; these are realtime interpretations, not pixel-identical recreations.
 - **Voice and text interaction:** Browser speech recognition or typed input feeds the rule-based dialogue; replies can be spoken aloud.
 - **Guided demo workflows:** Health inquiries, alert acknowledgment, and step-by-step booking work even without a loaded model.
 - **Accessible controls:** Large text and click targets, high contrast, clear status feedback, and quick replies.
@@ -230,7 +239,7 @@ The interface currently uses Chinese labels; English translations below identify
 
 1. Select **开始说话** (Start Speaking; no need to hold the button), or type a request. Use **放大文字** (Enlarge Text) to increase the font size. Example requests in Chinese: “我最近头晕”, “查看健康预警”, or “帮我预约门诊”.
 2. Use the large buttons below the reply to acknowledge an alert, choose a department and time, and confirm a booking. At any booking step, choose or type “取消预约” to cancel.
-3. The default character is `models/characters/AstraYao.vrm`, shown from the front in a full-body view. Drag with the left mouse button to rotate, Shift-drag to pan, and use the wheel to zoom. **恢复全身** (Restore Full Body) resets the view. Select another character in **演示人员设置** (Demo Character Settings), or load a local `.vrm` file.
+3. The default character is the school boy, `models/characters/schoolBoy.vrm`, with a male voice preset, shown from the front in a full-body view. Drag with the left mouse button to rotate, Shift-drag to pan, and use the wheel to zoom. **恢复全身** (Restore Full Body) resets the view. Select another character in **演示人员设置** (Demo Character Settings), or load a local `.vrm` file.
 4. You can load and play a local `.vrma` animation. Put scene actions in `models/animations/` and name versions `scene_number.vrma`. The app randomly picks among versions for the same scene and avoids repeating the previous version when alternatives exist. Refresh the page after adding an action.
 5. If speech recognition is unsupported, the page shows a message and typed input remains available. The quick actions **问问健康** (Ask About Health), **查看提醒** (View Alerts), and **预约服务** (Book a Service) work without typing; choosing another service starts its workflow.
 
@@ -246,7 +255,7 @@ Text replies appear before speech. Audio is requested and played sentence by sen
 
 ```powershell
 python -B -m unittest discover -s tests -v
-node --test tests/test_vrm_frontend.cjs
+node --test tests/test_vrm_frontend.cjs tests/test_hospital_scenes.cjs tests/test_avatar_surface.cjs tests/test_hospital_rooms.cjs
 npm ci
 npm run build:vrm
 npm run test:browser

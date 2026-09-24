@@ -39,7 +39,7 @@ test('unknown saved values and blocked storage safely use the default scene', as
   for (const read of [() => 'https://unknown.example/scene', () => '__proto__', () => { throw Error('blocked'); }]) {
     const h = harness({ read });
     await h.selection.restore();
-    assert.deepEqual(h.commits, ['outpatient']);
+    assert.deepEqual(h.commits, ['outpatient3d']);
     assert.equal(await h.selection.select('unknown'), false);
   }
 });
@@ -89,7 +89,7 @@ test('a failed restored scene falls back without replacing its saved preference'
     return url;
   } });
   await h.selection.restore();
-  assert.deepEqual(h.commits, ['outpatient']);
+  assert.deepEqual(h.commits, ['outpatient3d']);
   assert.deepEqual(h.writes, []);
 });
 
@@ -109,6 +109,87 @@ test('saving failures leave the new scene usable and clearly report the unsaved 
   assert.equal(await h.selection.select('guidance'), true);
   assert.equal(h.selection.current, 'guidance');
   assert.deepEqual(h.notices.at(-1), ['unsaved', 'guidance']);
+});
+
+test('the scene picker preserves renderer status and retries a failed 3D selection', async () => {
+  // Run the real DOM integration: its notification order must not replace a
+  // renderer's pending/error status with the reference image's ready status.
+  const element = () => ({
+    dataset: {}, style: {}, attributes: {}, handlers: {}, children: [],
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener(name, handler) { this.handlers[name] = handler; },
+    removeEventListener(name) { delete this.handlers[name]; },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    appendChild(child) { this.children.push(child); child.parent = this; },
+    remove() { this.parent.children = this.parent.children.filter(child => child !== this); },
+    querySelector() { return this.children[0] || null; },
+    getBoundingClientRect() { return {}; },
+  });
+  const root = element(), room = element(), status = element(), picker = element(), help = element();
+  const elements = { 'hospital-room': room, 'scene-status': status, 'scene-options': picker, 'help-dialog': help };
+  const choices = ['outpatient3d', 'waiting3d', 'guidance3d', 'outpatient', 'waiting', 'guidance'].map(id => {
+    const button = element();
+    button.dataset.sceneChoice = id;
+    return button;
+  });
+  const writes = [], attempts = [];
+  const restored = deferred();
+  let imageLoads = 0;
+  const sandbox = {
+    document: Object.assign(element(), {
+      documentElement: root, hidden: false,
+      getElementById: id => elements[id], querySelectorAll: () => choices,
+    }),
+    window: Object.assign(element(), {
+      localStorage: { getItem: () => 'outpatient', setItem: (key, value) => writes.push([key, value]) },
+    }),
+    Image: class {
+      set src(value) { this.url = value; imageLoads += 1; queueMicrotask(() => this.onload()); }
+      decode() { return Promise.resolve(); }
+      cloneNode() { return element(); }
+    },
+    setTimeout, clearTimeout,
+  };
+  const domContext = vm.createContext(sandbox);
+  vm.runInContext(source.replace(/^export /gm, ''), domContext);
+  const createScenes = vm.runInContext('createHospitalScenes', domContext);
+  const scenes = createScenes({ reduced: true, onChange: (mood, id) => {
+    if (id !== 'outpatient3d') { restored.resolve(); return; }
+    assert.equal(mood.renderer, 'three');
+    assert.equal(scenes.selection.current, 'outpatient3d');
+    const attempt = deferred();
+    attempts.push(attempt);
+    status.textContent = 'renderer loading';
+    return attempt.promise.then(success => {
+      status.textContent = success ? 'renderer ready' : 'renderer failed; retry available';
+      root.dataset.renderMode = success ? 'three' : 'image';
+    });
+  } });
+
+  try {
+    await restored.promise;
+    const button = choices.find(choice => choice.dataset.sceneChoice === 'outpatient3d');
+    assert.equal(await button.handlers.click(), true);
+    assert.equal(attempts.length, 1);
+    assert.equal(status.textContent, 'renderer loading');
+    attempts[0].resolve(false);
+    await attempts[0].promise;
+    assert.equal(status.textContent, 'renderer failed; retry available');
+    assert.equal(root.dataset.renderMode, 'image');
+
+    const imageCount = room.children.length;
+    assert.equal(await button.handlers.click(), true);
+    assert.equal(attempts.length, 2, 'reselecting must invoke the renderer again');
+    assert.equal(status.textContent, 'renderer loading');
+    assert.equal(room.children.length, imageCount, 'retry should reuse the committed image');
+    assert.equal(imageLoads, 1, 'outpatient and its 3D sample share the cached reference');
+    assert.equal(button.attributes['aria-pressed'], 'true');
+    assert.deepEqual(writes, [['anxin.scene', 'outpatient3d']]);
+    attempts[1].resolve(true);
+    await attempts[1].promise;
+    assert.equal(status.textContent, 'renderer ready');
+    assert.equal(root.dataset.renderMode, 'three');
+  } finally { scenes.dispose(); }
 });
 
 test('reduced motion is stationary regardless of time or pointer movement', () => {

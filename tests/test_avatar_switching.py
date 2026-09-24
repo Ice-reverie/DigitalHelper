@@ -5,7 +5,7 @@ import struct
 import tempfile
 from urllib.parse import quote
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from vrm_demo import vrm_server as server
@@ -14,7 +14,7 @@ from vrm_demo import vrm_server as server
 class AvatarSwitchingTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_characters_have_readable_labels_and_standard_profiles(self):
         catalog = {item['id']: item for item in await server.avatar_catalog()}
-        expected = {'doctorBoy': '医生（男）', 'schoolBoy': '校服男生',
+        expected = {'doctorBoy': '医生（男）', 'schoolBoy': '校服男生（默认）',
                     'schoolGirl': '校服女生', 'studentGirl': '学生女生'}
         for name, label in expected.items():
             with self.subTest(name=name):
@@ -24,10 +24,12 @@ class AvatarSwitchingTests(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_and_all_models_are_served_without_directory_access(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url='http://test') as client:
             catalog = (await client.get('/api/avatars')).json()
-            self.assertEqual(catalog[0]['id'], 'AstraYao')
+            self.assertEqual(catalog[0]['id'], 'schoolBoy')
             self.assertEqual(catalog[0]['profile'], 'standard')
+            self.assertEqual(catalog[0]['label'], '校服男生（默认）')
+            self.assertEqual(catalog[0]['voice_gender'], 'male')
             default = await client.get('/api/avatar')
-            self.assertEqual(default.content, server.avatar_files()['AstraYao'].read_bytes())
+            self.assertEqual(default.content, server.avatar_files()['schoolBoy'].read_bytes())
             self.assertEqual({a['id'] for a in catalog}, set(server.avatar_files()))
             for avatar in catalog:
                 response = await client.get('/api/avatars/' + avatar['id'])
@@ -39,6 +41,18 @@ class AvatarSwitchingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await server.avatar_catalog(), [])
             with self.assertRaises(server.HTTPException):
                 await server.named_avatar('Klee')
+
+    async def test_missing_avatar_uses_default_voice_and_preserves_explicit_preferences(self):
+        with patch.object(server, 'speech_segments', new=AsyncMock(return_value={'segments': []})) as speech:
+            await server.tts(server.TTSRequest(text='您好'))
+            speech.assert_awaited_with('您好', 'male')
+            await server.tts(server.TTSRequest(text='您好', avatar_id='AstraYao'))
+            speech.assert_awaited_with('您好', 'female')
+            await server.tts(server.TTSRequest(text='您好', voice_gender='female'))
+            speech.assert_awaited_with('您好', 'female')
+        with patch.object(server, 'reply_with_model', new=AsyncMock(side_effect=lambda text, context, result: result)):
+            response = await server.chat(server.ChatRequest(text='谢谢', include_audio=False))
+            self.assertEqual(response['voice_gender'], 'male')
 
     def test_all_current_models_have_humanoid_eyes_and_valid_expression_targets(self):
         files = server.avatar_files()
@@ -66,19 +80,19 @@ class AvatarSwitchingTests(unittest.IsolatedAsyncioTestCase):
             root.mkdir()
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url='http://test') as client:
                 self.assertEqual((await client.get('/api/avatars')).json(), [])
-                for filename in ['新人物 #1.VRM', 'Lumine_custom.vrm', 'AstraYao.vrm']:
+                for filename in ['新人物 #1.VRM', 'Lumine_custom.vrm', 'schoolBoy.vrm', 'AstraYao.vrm']:
                     (root/filename).write_bytes(b'glTF-test')
                 (root/'notes.txt').write_text('private')
                 (root/'nested.vrm').mkdir()
                 (root/'nested.vrm'/'hidden.vrm').write_bytes(b'glTF')
                 catalog = (await client.get('/api/avatars')).json()
-                self.assertEqual(catalog[0]['id'], 'AstraYao')
-                self.assertEqual({a['id'] for a in catalog}, {'新人物 #1','Lumine_custom','AstraYao'})
+                self.assertEqual(catalog[0]['id'], 'schoolBoy')
+                self.assertEqual({a['id'] for a in catalog}, {'新人物 #1','Lumine_custom','schoolBoy','AstraYao'})
                 self.assertEqual(next(a['profile'] for a in catalog if a['id']=='Lumine_custom'), 'standard')
                 response = await client.get('/api/avatars/'+quote('新人物 #1', safe=''))
                 self.assertEqual(response.content, b'glTF-test')
                 (root/'新人物 #1.VRM').unlink()
                 self.assertEqual((await client.get('/api/avatars/'+quote('新人物 #1', safe=''))).status_code,404)
-                self.assertEqual(len((await client.get('/api/avatars')).json()),2)
+                self.assertEqual(len((await client.get('/api/avatars')).json()),3)
                 for name in ['notes','nested.vrm','..%5C.env','nested.vrm%2Fhidden']:
                     self.assertEqual((await client.get('/api/avatars/'+name)).status_code,404)

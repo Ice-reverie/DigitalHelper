@@ -48,12 +48,13 @@ app = FastAPI(title="安心健康助手")
 mimetypes.add_type("text/javascript", ".js")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
-DEFAULT_AVATAR = "AstraYao"
+DEFAULT_AVATAR = "schoolBoy"
 AVATAR_LABELS = {
     "doctorBoy": "医生（男）",
     "schoolBoy": "校服男生",
     "schoolGirl": "校服女生",
     "studentGirl": "学生女生",
+    "Lumine_companion": "Lumine（适配版）",
 }
 
 
@@ -82,7 +83,7 @@ def avatar_files():
 
 @app.get("/api/avatars")
 async def avatar_catalog():
-    return [{"id": name, "label": "AstraYao（默认）" if name == DEFAULT_AVATAR else "Lumine（适配版）" if name == "Lumine_companion" else AVATAR_LABELS.get(name, name),
+    return [{"id": name, "label": AVATAR_LABELS.get(name, name) + ("（默认）" if name == DEFAULT_AVATAR else ""),
              "voice_gender": tts_gateway.voice_gender(name),
              "profile": "lumine" if name in {"Lumine_companion", "Lumine"} else "standard"}
             for name in avatar_files()]
@@ -487,7 +488,7 @@ async def health():
 async def _warmup_tts():
     if edge_tts is not None:
         try:
-            await asyncio.wait_for(tts_to_mp3("您好"), timeout=20)
+            await asyncio.wait_for(tts_to_mp3("您好", tts_gateway.voice_gender(DEFAULT_AVATAR)), timeout=20)
             print("[warmup] edge_tts ready", flush=True)
         except Exception as error:
             print("[warmup] speech unavailable", flush=True)

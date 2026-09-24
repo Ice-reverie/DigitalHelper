@@ -137,6 +137,139 @@ test('sending consecutive messages restarts speech after stopping the previous r
   assert.equal(f.run('playbackStopped || speaking || browserSpeaking'),false);
 });
 
+test('3D room and avatar share depth and projection while their lighting uses separate passes', () => {
+  const f = frontend();
+  const passes = [];
+  let clears = 0;
+  f.sandbox.testThree = require('three');
+  f.sandbox.recordPass = (mask, background, autoClear) => passes.push({ mask, background, autoClear });
+  f.sandbox.recordClear = () => { clears += 1; };
+  f.run(`
+    THREE = testThree;
+    camera = new THREE.PerspectiveCamera();
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xeaf3fa);
+    const savedBackground = scene.background;
+    renderer = { clear: recordClear, render(s,c) { recordPass(c.layers.mask, Boolean(s.background), this.autoClear); } };
+    hospitalRenderMode = 'three';
+    renderHospitalFrame();
+  `);
+  assert.equal(clears, 1);
+  assert.deepEqual(passes, [
+    {mask: 2, background: true, autoClear: false},
+    {mask: 1, background: false, autoClear: false},
+  ]);
+  assert.equal(f.run('scene.background === savedBackground'), true);
+  f.run("hospitalRenderMode = 'image'; scene.background = null; renderHospitalFrame();");
+  assert.deepEqual(passes.at(-1), {mask: 1, background: false, autoClear: true});
+});
+
+test('3D eye-level view keeps the whole avatar clear of desktop and mobile controls', () => {
+  for (const [width, height, dock] of [[1374,1063,540], [1078,815,490], [390,780,290], [320,632,315]]) {
+    const f = frontend();
+    f.sandbox.testThree = require('three');
+    Object.assign(f.elements.get('stage'), {clientWidth:width,clientHeight:height});
+    f.sandbox.document.querySelector = () => ({getBoundingClientRect:()=>({height:dock})});
+    f.run(`
+      THREE = testThree;
+      camera = new THREE.PerspectiveCamera(30, ${width/height}, .1, 80);
+      avatarBounds = new THREE.Box3(new THREE.Vector3(-.3,0,-.15),new THREE.Vector3(.3,1.7,.15));
+      controls = {target:new THREE.Vector3(), update(){camera.lookAt(this.target); camera.updateMatrixWorld();}};
+      fitHospitalView();
+    `);
+    const head = f.run('new THREE.Vector3(0,1.7,0).project(camera).y');
+    const foot = f.run('new THREE.Vector3(0,0,0).project(camera).y');
+    const headY = (1-head)*height/2, footY = (1-foot)*height/2;
+    const top = width <=760 ?165:36;
+    const bottom = width <=760 ?dock+72:50;
+    assert.ok(headY >= top-12, `${width}: head at ${headY}`);
+    assert.ok(footY <= height-bottom+12, `${width}: feet at ${footY}`);
+    assert.ok(footY > headY && f.run('controls.minDistance < controls.maxDistance'));
+    assert.ok(f.run('camera.position.y > 1.7 * .85 && camera.position.y < 1.7 * .95'), 'viewer is near eye height');
+    assert.ok(f.run('Math.abs(camera.getWorldDirection(new THREE.Vector3()).y) < 1e-10'), 'level optical axis');
+    // At the viewer\'s eye height, points at different depths share the same
+    // screen height. This catches waist-height framing disguised with a tilt.
+    assert.ok(f.run(`Math.abs(new THREE.Vector3(0,camera.position.y,-3).project(camera).y
+      - new THREE.Vector3(0,camera.position.y,0).project(camera).y) < 1e-10`));
+    f.run('camera.position.set(1,.5,2); controls.target.set(.2,.8,0); fitHospitalView();');
+    assert.ok(f.run('Math.abs(camera.getWorldDirection(new THREE.Vector3()).y) < 1e-10'), 'reset restores eye-level perspective');
+  }
+});
+
+test('growing service controls reframe the 3D avatar even when canvas size stays fixed', () => {
+  const f = frontend();
+  let notify;
+  let dockHeight = 280;
+  const values = {};
+  f.sandbox.ResizeObserver = class { constructor(callback) { notify = callback; } observe() {} };
+  f.sandbox.document.querySelector = () => ({getBoundingClientRect:()=>({height:dockHeight})});
+  f.sandbox.document.documentElement.style = {setProperty:(name,value)=>{values[name]=value;}};
+  f.run('reframes=0; fitAvatar=()=>reframes++; bindUI(); hospitalRenderMode="three"');
+  notify();
+  dockHeight = 365;
+  notify();
+  assert.equal(values['--dock-height'], '365px');
+  assert.equal(f.run('reframes'), 2);
+  f.run('hospitalRenderMode="image"');
+  notify();
+  assert.equal(f.run('reframes'), 2);
+});
+
+function roomFrontend() {
+  const f = frontend();
+  f.sandbox.testThree = require('three');
+  f.sandbox.document.documentElement.dataset = {};
+  f.sandbox.document.getElementById('scene-status').textContent = '';
+  f.run(`THREE=testThree; scene=new THREE.Scene(); renderer={}; resizeStage=()=>{};
+    hospitalSceneCatalog={waiting3d:{name:'候诊区',comparison:'waiting'},guidance3d:{name:'智慧导诊',comparison:'guidance'},waiting:{comparison:'waiting3d'}};`);
+  return f;
+}
+
+test('late 3D room loads remain hidden after a newer scene wins and reuse their cache', async () => {
+  const f = roomFrontend();
+  let finishWaiting, finishGuidance, loads = 0;
+  f.sandbox.loadWaiting = () => {loads++; return new Promise(resolve => {finishWaiting=resolve;});};
+  f.sandbox.loadGuidance = () => new Promise(resolve => {finishGuidance=resolve;});
+  f.run('hospitalRoomLoaders.waiting3d=loadWaiting; hospitalRoomLoaders.guidance3d=loadGuidance; selectedHospitalId="waiting3d"');
+  const first = f.run('syncHospitalRenderer()');
+  f.run('selectedHospitalId="guidance3d"');
+  const second = f.run('syncHospitalRenderer()');
+  const THREE = require('three');
+  const waiting = {group:new THREE.Group(),floorY:0}, guidance = {group:new THREE.Group(),floorY:0};
+  finishGuidance(guidance); await second;
+  finishWaiting(waiting); await first;
+  assert.equal(guidance.group.visible, true);
+  assert.equal(waiting.group.visible, false);
+  assert.equal(f.run('activeHospitalRoom'), guidance);
+  assert.match(f.elements.get('scene-status').textContent, /智慧导诊/);
+  f.run('selectedHospitalId="waiting3d"'); await f.run('syncHospitalRenderer()');
+  assert.equal(loads, 1);
+  assert.equal(waiting.group.visible, true);
+  assert.equal(guidance.group.visible, false);
+  f.run('selectedHospitalId="waiting"'); await f.run('syncHospitalRenderer()');
+  assert.equal(waiting.group.visible, false);
+  assert.equal(f.run('hospitalRenderMode'), 'image');
+  assert.equal(f.elements.get('scene-compare-btn').textContent, '查看3D场景');
+});
+
+test('failed 3D loads report the fallback and allow retry; unavailable WebGL never reports success', async () => {
+  const f = roomFrontend();
+  f.sandbox.failedRoom = () => Promise.reject(new Error('module unavailable'));
+  f.run('hospitalRoomLoaders.waiting3d=failedRoom; selectedHospitalId="waiting3d"');
+  await f.run('syncHospitalRenderer()');
+  assert.equal(f.run('hospitalRenderMode'), 'image');
+  assert.equal(f.run('hospitalRoomPromises.has("waiting3d")'), false);
+  assert.match(f.elements.get('scene-status').textContent, /再次选择/);
+  f.sandbox.loadedRoom = {group:new (require('three').Group)(),floorY:0};
+  f.run('hospitalRoomLoaders.waiting3d=()=>Promise.resolve(loadedRoom)');
+  await f.run('syncHospitalRenderer()');
+  assert.equal(f.run('hospitalRenderMode'), 'three');
+  f.run('selectedHospitalId="guidance3d"; renderer=null');
+  await f.run('syncHospitalRenderer()');
+  assert.equal(f.run('hospitalRenderMode'), 'image');
+  assert.match(f.elements.get('scene-status').textContent, /3D渲染暂不可用/);
+});
+
 test('chat shows text and unlocks controls before speech synthesis finishes', async () => {
   const f = frontend();
   let finishSpeech;
@@ -830,7 +963,7 @@ test('presenter default selection persists independently of the current avatar a
   f.elements.get('avatar-select').value='Klee';
   f.elements.get('set-default-avatar-btn').handlers.click();
   assert.equal(f.run('savedDefaultAvatar()'),'Klee');
-  assert.equal(f.run('currentAvatarId'),'AstraYao');
+  assert.equal(f.run('currentAvatarId'),'schoolBoy');
   f.elements.get('reset-default-avatar-btn').handlers.click();
   assert.equal(f.run('savedDefaultAvatar()'),null);
   f.sandbox.window.localStorage.setItem=()=>{throw new Error('denied')};
@@ -838,23 +971,23 @@ test('presenter default selection persists independently of the current avatar a
   assert.match(f.elements.get('default-avatar-status').textContent,/未能保存/);
 });
 
-test('startup resolves saved defaults through the catalog and falls back to AstraYao', async () => {
+test('startup resolves saved defaults through the catalog and falls back to the school boy', async () => {
   for(const saved of ['Klee','removed','../unsafe',null]) {
     const f=frontend();
     f.sandbox.window.localStorage={getItem:()=>saved};
     f.sandbox.fetch=async()=>({ok:true,json:async()=>[{id:'Klee',label:'Klee',profile:'standard'}]});
     f.run('renderer={}; loadVrm=(...args)=>defaultLoad=args');
     await f.run('initializeDefaultAvatar()');
-    assert.equal(f.run('defaultLoad[0]'),saved==='Klee'?'/api/avatars/Klee':'/api/avatar');
+    assert.equal(f.run('defaultLoad[0]'),saved==='Klee'?'/api/avatars/Klee':'/api/avatars/schoolBoy');
     assert.equal(f.run('defaultLoad[3].profile'),'standard');
-    assert.equal(f.run('defaultLoad[3].id'),saved==='Klee'?'Klee':'AstraYao');
+    assert.equal(f.run('defaultLoad[3].id'),saved==='Klee'?'Klee':'schoolBoy');
   }
   const f=frontend();
   f.sandbox.window.localStorage={getItem:()=> 'Klee'};
   f.sandbox.fetch=async()=>{throw new Error('offline')};
   f.run('renderer={}; loadVrm=(...args)=>defaultLoad=args');
   await f.run('initializeDefaultAvatar()');
-  assert.equal(f.run('defaultLoad[3].id'),'AstraYao');
+  assert.equal(f.run('defaultLoad[3].id'),'schoolBoy');
 });
 
 test('voice overrides are per avatar and auto restores the catalog preset', () => {
@@ -871,6 +1004,14 @@ test('voice overrides are per avatar and auto restores the catalog preset', () =
   f.elements.get('avatar-voice-select').value='auto';
   f.elements.get('avatar-voice-select').handlers.change();
   assert.equal(f.run('avatarVoice().voice_gender'),'male');
+});
+
+test('the system default keeps its male voice while the avatar catalog is unavailable', () => {
+  const f = frontend();
+  f.run('availableAvatars=[]; currentAvatarId=DEFAULT_AVATAR.id; refreshAvatarVoice();');
+  assert.equal(f.run('avatarVoice().voice_gender'), 'male');
+  f.elements.get('avatar-voice-select').value = 'female';
+  assert.equal(f.run('avatarVoice().voice_gender'), 'female');
 });
 
 test('browser fallback chooses a matching Chinese voice without changing pitch', async () => {

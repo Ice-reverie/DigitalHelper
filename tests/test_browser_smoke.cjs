@@ -6,10 +6,10 @@ const path = require('node:path');
 const {chromium} = require('playwright-core');
 
 const root = path.resolve(__dirname, '../vrm_demo/static');
-const avatar = path.resolve(__dirname, '../models/characters/AstraYao.vrm');
+const avatar = path.resolve(__dirname, '../models/characters/schoolBoy.vrm');
 const models = [
+  {id:'schoolBoy', label:'校服男生（默认）', voice_gender:'male'},
   {id:'doctorBoy', label:'医生（男）', voice_gender:'male'},
-  {id:'schoolBoy', label:'校服男生', voice_gender:'male'},
   {id:'schoolGirl', label:'校服女生', voice_gender:'female'},
   {id:'studentGirl', label:'学生女生', voice_gender:'female'},
 ];
@@ -59,7 +59,7 @@ test('real browser loads new avatars, plays greeting, and survives a missing 3D 
         return json({reply:`收到：${incoming.text}`, action:incoming.text === '你好' ? 'greet' : null, context:{},
           quick_replies:[], segments:[{text:`收到：${incoming.text}`}]});
       }
-      if (pathname === '/api/tts') return json({voice_gender:'female', segments:[{text:'播报'}]});
+      if (pathname === '/api/tts') return json({voice_gender:'male', segments:[{text:'播报'}]});
       if (pathname === '/static/js/vrm-dependencies.js' && unavailable3D) {
         response.writeHead(503, {'Content-Type':'text/javascript', 'Cache-Control':'no-store'});
         return response.end('');
@@ -85,7 +85,7 @@ test('real browser loads new avatars, plays greeting, and survives a missing 3D 
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         const bundleResponse = page.waitForResponse(response =>
-          response.url().endsWith('/static/js/vrm-dependencies.js'));
+          new URL(response.url()).pathname === '/static/js/vrm-dependencies.js');
         await page.goto(`http://127.0.0.1:${server.address().port}/static/VRMCharacter.html`);
         assert.equal((await bundleResponse).status(), broken ? 503 : 200);
         if (!broken) {
