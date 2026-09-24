@@ -24,6 +24,7 @@
 - **肢体动作**：问候回复可触发挥手；支持加载 `.vrma` 动作文件手动播放。
 - **关键词触发动作**：对话命中预设关键词时，自动加载并播放对应 `.vrma` 动作（greet / booking / alert / confirm / thanks / explain）。
 - **业务问答**：内置健康查询、预警确认、预约挂号、服务咨询、问候、致谢等意图。
+- **可选演示数据库**：开启后读取虚构科室、号源、演示健康记录和预警；模拟预约与预警选择写入本地运行副本。默认关闭，MySQL 可通过相同接口接入。
 
 ### 技术栈
 
@@ -85,6 +86,12 @@ python vrm_demo/vrm_server.py
 
 > 说明：预警、联系家人和预约均为本地模拟流程，不会真实发送消息或向医院提交数据。
 
+#### 可选数据库演示
+
+项目根目录的 `digitalhelper_demo.sqlite3` 只含虚构数据，可以提交到 GitHub。默认不开启数据库；在根目录 `.env` 中设置 `DIGITALHELPER_DB_ENABLED=true`、`DIGITALHELPER_DB_BACKEND=sqlite` 并重启服务后，系统会将种子库复制到忽略 Git 的 `output/digitalhelper_demo.sqlite3`。确认模拟预约会占用该运行副本的名额，确认预警也会保存状态。号源按需补充未来 14 天；“前方人数”表示同一科室、日期和时段内先前确认的模拟预约人数，不是医院现场叫号。关闭开关后恢复原有规则流程。
+
+MySQL 连接、建表和测试库重置说明见 [数据库接入说明](docs/database-integration.md)。MySQL 需要单独安装可选连接依赖，并手动准备数据；不会自动创建或改写外部数据库。
+
 文字回复先显示，语音再按句请求和播放；某句在线合成或播放失败时，使用浏览器语音补播该句。后端顺序合成句子，口型分析最多并行处理 3 句；每种在线语音服务单次请求最多等待 15 秒。口型时间轴需要额外安装 `av` 并使用仓库内的 Rhubarb 工具；缺少这些组件不影响文字对话和备用口型。
 
 ### 开发验证与旧素材工具
@@ -134,6 +141,7 @@ npm ci && npm run build:vrm && npm run test:browser
 ### 相关文档
 
 - [可选大模型配置与规则回退](docs/model-integration.md)
+- [SQLite 测试库与 MySQL 接口](docs/database-integration.md)
 - [需求定义书](docs/需求定义书.md)
 - [技术设计文档](docs/技术设计文档.md)
 
@@ -161,6 +169,7 @@ The FastAPI backend provides conversation and text-to-speech services. The brows
 - **Lip sync and expressions:** Rhubarb timelines and audio levels drive mouth shapes, with fallbacks when timeline data is unavailable. Characters also blink, move subtly while idle, and nod while speaking.
 - **Actions:** Greetings can trigger a wave. Local `.vrma` animations can be played manually or selected automatically from dialogue keywords (`greet`, `booking`, `alert`, `confirm`, `thanks`, and `explain`).
 - **Built-in intents:** Health inquiries, alerts, appointments, service questions, greetings, and thanks.
+- **Optional demo database:** When enabled, answers use fictional department, appointment-slot, health-record, and alert data. Demo appointments and alert choices persist in a local runtime copy. SQLite and MySQL share one data-access interface.
 
 ### Technology
 
@@ -223,6 +232,10 @@ The interface currently uses Chinese labels; English translations below identify
 
 Alerts, family contact, and appointments are local simulations: they do not send messages or submit data to a hospital. Health information in the demo is not a medical diagnosis.
 
+#### Optional database demo
+
+The checked-in `digitalhelper_demo.sqlite3` contains fictional data only. Database use is off by default. Set `DIGITALHELPER_DB_ENABLED=true` and `DIGITALHELPER_DB_BACKEND=sqlite` in the root `.env`, then restart the server. The application copies the seed to the Git-ignored `output/digitalhelper_demo.sqlite3`, where demo bookings and alert choices are saved. It adds fictional slots for the next 14 days as needed. “People ahead” counts earlier confirmed demo bookings in the same department, date, and time slot; it is not a live hospital queue. Switching the feature off restores the original rule-based flow. See [database integration](docs/database-integration.md) for MySQL setup and data details.
+
 Text replies appear before speech. Audio is requested and played sentence by sentence; if online synthesis or playback fails for a sentence, the browser attempts to speak that sentence. The backend synthesizes sentences in sequence and analyzes up to three lip-sync segments concurrently. Each online speech service has a 15-second limit per request. Rhubarb timelines require the included Rhubarb tool and the optional `av` package; missing components do not prevent text chat or fallback lip sync.
 
 ### Development checks and legacy media tools
@@ -274,6 +287,7 @@ The main application lives in `vrm_demo/`.
 ### Further documentation
 
 - [Optional language-model configuration and rule fallback](docs/model-integration.md) (Chinese)
+- [SQLite demo database and MySQL adapter](docs/database-integration.md) (Chinese)
 - [Character voices, TTS, and chat configuration](docs/voice-and-tts.md) (Chinese)
 - [Requirements document](docs/需求定义书.md) (Chinese)
 - [Technical design document](docs/技术设计文档.md) (Chinese)

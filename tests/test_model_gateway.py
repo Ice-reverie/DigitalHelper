@@ -152,7 +152,9 @@ class ModelGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("".join(s["text"] for s in result["segments"]), payload["reply"])
         self.assertNotIn("test-secret", json.dumps(result))
         self.assertEqual(await server.health(), {"status": "ok", "tts_available": server.edge_tts is not None,
-                                                "llm_configured": True, "tts_protocol":"edge", "tts_configured":False, "tts_edge_available":server.edge_tts is not None})
+                                                "llm_configured": True, "tts_protocol":"edge", "tts_configured":False,
+                                                "tts_edge_available":server.edge_tts is not None,
+                                                "db_enabled":False, "db_backend":"sqlite", "db_available":False})
 
     async def test_client_history_is_not_sent_to_model(self):
         request = server.ChatRequest(text="陪我聊聊天", history=[

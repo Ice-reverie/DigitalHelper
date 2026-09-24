@@ -19,10 +19,12 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 if __package__:
-    from . import tts_gateway
+    from . import tts_gateway, database_gateway, database_dialogue
     from .model_gateway import reply_with_model, configuration as model_configuration
 else:
     import tts_gateway
+    import database_gateway
+    import database_dialogue
     from model_gateway import reply_with_model, configuration as model_configuration
 
 try:
@@ -477,7 +479,8 @@ async def index():
 async def health():
     return {"status": "ok", "tts_available": tts_gateway.edge_tts is not None or tts_gateway.configuration() is not None,
             **tts_gateway.status(),
-            "llm_configured": model_configuration() is not None}
+            "llm_configured": model_configuration() is not None,
+            **(await run_in_threadpool(database_gateway.status))}
 
 
 @app.on_event("startup")
@@ -537,8 +540,17 @@ async def tts(req: TTSRequest):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    result = build_reply(req.text, req.context)
-    result = await reply_with_model(req.text, req.context, result)
+    result = None
+    if database_gateway.enabled() and database_dialogue.needs_database(req.text, req.context):
+        try:
+            result = await run_in_threadpool(database_dialogue.respond, req.text, req.context)
+        except Exception:
+            # Do not log credentials, database URLs, or user content.
+            print("Demo database unavailable; retaining safe dialogue state")
+            result = database_dialogue.unavailable(req.text, req.context)
+    if result is None:
+        result = build_reply(req.text, req.context)
+        result = await reply_with_model(req.text, req.context, result)
     gender = tts_gateway.voice_gender(req.avatar_id or DEFAULT_AVATAR, req.voice_gender)
     if not req.include_audio:
         return {**result, "voice_gender": gender,
