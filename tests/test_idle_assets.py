@@ -50,6 +50,6 @@ class IdleAssetsTests(unittest.TestCase):
         avatar = asyncio.run(vrm_server.default_avatar())
         idle = asyncio.run(vrm_server.default_idle())
         self.assertEqual(Path(avatar.path).resolve(), (MODELS / 'characters/schoolBoy.vrm').resolve())
-        self.assertEqual(Path(idle.path).resolve(), (MODELS / 'animations/Lumine_idle.json').resolve())
+        self.assertEqual(Path(idle.path).resolve(), (MODELS / 'animations/Idle_Doctor.vrma').resolve())
         self.assertTrue(Path(avatar.path).is_file())
         self.assertTrue(Path(idle.path).is_file())

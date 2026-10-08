@@ -14,7 +14,9 @@ class AnimationVariantTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200)
             catalog = response.json()
             self.assertEqual(set(catalog), server.SCENE_ACTIONS)
-            self.assertEqual([v['id'] for v in catalog['explain']], ['explain_1', 'explain_2'])
+            self.assertEqual(catalog['explain'], [{'id': 'explain_1', 'secondary': False}])
+            self.assertEqual((await client.get('/api/animations/idle')).content[:4], b'glTF')
+            self.assertEqual((await client.get('/api/animations/idle/legacy')).json()['version'], 1)
             for name, variants in catalog.items():
                 self.assertTrue(variants)
                 for variant in variants:
@@ -24,7 +26,7 @@ class AnimationVariantTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(result.content[:4], b'glTF')
                     secondary = await client.get(url+'/secondary')
                     self.assertEqual(secondary.status_code, 200 if variant['secondary'] else 404)
-            for url in ['/api/animations/greet/explain_2', '/api/animations/explain/explain_999',
+            for url in ['/api/animations/explain/explain_2', '/api/animations/greet/explain_2', '/api/animations/explain/explain_999',
                         '/api/animations/unknown/unknown_1', '/api/animations/explain/explain_2.vrma',
                         '/api/animations/explain/%2e%2e%2fcharacters']:
                 self.assertEqual((await client.get(url)).status_code, 404)

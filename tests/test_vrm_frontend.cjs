@@ -493,6 +493,73 @@ test('idle sampling wraps at the loop boundary and reduced motion freezes its cl
   assert.equal(f.run('idleAnimation.time'), 2.05);
 });
 
+test('authored idle republishes held tracks, closes its loop and owns fingers', () => {
+  const f=frontend();
+  f.run(`samples=[];bone={quaternion:{fromArray(v){this.value=v[0]}}};face={weight:0};
+    idleAnimation={authored:true,time:7.99,duration:8,sampler:{bindings:[
+      {target:bone,property:'quaternion',interpolant:{evaluate(t){samples.push(t);return [.25,0,0,1]}}},
+      {target:face,property:'weight',interpolant:{evaluate(){return [.12]}}}]}};
+    idleHands=[{offset:{setFromAxisAngle(){throw Error('must not overwrite authored fingers')}}}];
+    updateIdle(.02);updateIdleHands(.02);`);
+  assert.ok(Math.abs(f.run('idleAnimation.time')-.01)<1e-10);
+  f.run('bone.quaternion.value=9;face.weight=1;scenePlayback={};updateIdle(1);');
+  assert.equal(f.run('bone.quaternion.value'),.25);
+  assert.equal(f.run('face.weight'),.12);
+  assert.ok(Math.abs(f.run('idleAnimation.time')-.01)<1e-10);
+  f.run('scenePlayback=null;motionReduced=true;updateIdle(2);');
+  assert.equal(f.run('samples.at(-1)'),0);
+});
+
+test('new idle loads reject stale avatars and safely fall back on failure', async () => {
+  const f=frontend();
+  f.run(`currentVrm={};modelLoadId=3;fallbacks=0;
+    createIdleSampler=()=>({duration:8,bindings:[]});
+    getIdleAnimation=()=>new Promise(resolve=>finishIdle=resolve);
+    loadLegacyIdle=async()=>{fallbacks++};`);
+  const stale=f.run('loadDefaultIdle({},currentVrm,3,false)');
+  f.run('modelLoadId=4;finishIdle({});');await stale;
+  assert.equal(f.run('idleAnimation'),null);
+  f.run("getIdleAnimation=async()=>{throw Error('offline')};");
+  await f.run('loadDefaultIdle({},currentVrm,4,false)');
+  assert.equal(f.run('fallbacks'),1);
+  f.run('getIdleAnimation=async()=>({});');
+  await f.run('loadDefaultIdle({},currentVrm,4,false)');
+  assert.equal(f.run('idleAnimation.authored'),true);
+  assert.equal(f.run('idleAnimation.duration'),8);
+});
+
+test('authored idle pauses automatic face writers while live speech keeps its mouth', () => {
+  const f=frontend();const values=avatar(f);
+  f.run(`idleAnimation={authored:true,time:0,duration:8,sampler:{bindings:[]}};
+    currentVrm.lookAt={target:{}};blinks=0;updateBlink=()=>blinks++;
+    browserSpeaking=true;updateAvatar(.016);`);
+  assert.ok(values.aa>0 || values.ih>0 || values.ou>0 || values.ee>0 || values.oh>0);
+  assert.equal(f.run('blinks'),0);
+  assert.equal(f.run('currentVrm.lookAt.target'),null);
+  f.run('motionReduced=true;updateAvatar(.016);');
+  assert.equal(f.run('blinks'),1);
+});
+
+test('ten-frame transitions blend expressions toward authored idle instead of zero', () => {
+  const f=frontend();
+  f.run(`face={weight:.12};currentVrm={expressionManager:{getValue(){return face.weight},setValue(n,v){face.weight=v}}};
+    scenePlayback={elapsed:10-HEALTH_TRANSITION_SECONDS/2,duration:10,transition:HEALTH_TRANSITION_SECONDS,
+      expressions:['happy'],fromExpressions:new Map([['happy',.12]]),bases:[],from:new Map(),
+      bindings:[{target:face,proxy:{weight:.4},property:'weight'}]};
+    mixer={update(){}};updateSceneAnimation(0);`);
+  assert.ok(Math.abs(f.run('face.weight')-.26)<1e-10);
+});
+
+test('body clip timing follows elapsed seconds even when physics frames are capped', () => {
+  const f=frontend();avatar(f);
+  f.run(`steps=[];updateIdle=t=>{steps.push(['idle',t]);return true};
+    updateSceneAnimation=t=>steps.push(['action',t]);
+    currentVrm.update=t=>steps.push(['physics',t]);
+    updateAvatar(.05,.4);`);
+  assert.deepEqual(JSON.parse(f.run('JSON.stringify(steps)')),
+    [['idle',.4],['action',.4],['physics',.05]]);
+});
+
 test('blinking closes then reopens both eyes and schedules the next blink', () => {
   const f = frontend();
   const values = avatar(f);
@@ -694,7 +761,7 @@ test('numbered body resources have independent caches', async () => {
 
 test('seven-second explain secondary tracks use their own timeline and return to neutral', () => {
   const f = frontend();
-  f.sandbox.explainCloth = JSON.parse(fs.readFileSync(path.join(__dirname,'../models/animations/explain_2.secondary.json')));
+  f.sandbox.explainCloth = JSON.parse(fs.readFileSync(path.join(__dirname,'../models/animations/legacy/explain_2.secondary.json')));
   assert.equal(f.run('validateGreetSecondary(explainCloth).tracks.length'), 49);
   f.run(`defaultAvatar=true; sampleIndex=-1;
     q={clone(){return this},fromArray(a,i){sampleIndex=i;return this},slerp(){return this},multiply(){return this}};

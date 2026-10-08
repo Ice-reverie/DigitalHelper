@@ -29,7 +29,8 @@ function avatar(materials) {
   } } };
 }
 
-test('recognizes skin names in the shipped AstraYao model instead of a stale avatar name', () => {
+test('recognizes skin names in the optional AstraYao model instead of a stale avatar name',
+  {skip: !fs.existsSync(path.join(__dirname, '../models/characters/AstraYao.vrm')) && 'AstraYao is not in the current avatar catalog'}, () => {
   const binary = fs.readFileSync(path.join(__dirname, '../models/characters/AstraYao.vrm'));
   const metadata = JSON.parse(binary.toString('utf8', 20, 20 + binary.readUInt32LE(12)));
   const sourceMaterials = metadata.materials.map(entry => material(entry.name));

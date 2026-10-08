@@ -99,9 +99,18 @@ async def named_avatar(name: str):
 
 @app.get("/api/animations/idle")
 async def default_idle():
-    path = os.path.join(BASE_DIR, "..", "models", "animations", "Lumine_idle.json")
+    path = os.path.join(BASE_DIR, "..", "models", "animations", "Idle_Doctor.vrma")
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Default idle animation not found")
+    return FileResponse(path, media_type="model/gltf-binary")
+
+
+@app.get("/api/animations/idle/legacy")
+async def legacy_idle():
+    """Compatibility fallback when the new idle cannot be loaded."""
+    path = os.path.join(BASE_DIR, "..", "models", "animations", "Lumine_idle.json")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Legacy idle animation not found")
     return FileResponse(path, media_type="application/json")
 
 

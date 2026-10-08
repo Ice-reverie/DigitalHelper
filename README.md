@@ -81,7 +81,7 @@ python vrm_demo/vrm_server.py
    - 示例：「我最近头晕」「查看健康预警」「帮我预约门诊」。
 2. 使用回复下方的大按钮完成预警确认、选择科室、选择时间和最终确认；预约任意步骤都可选择或输入「取消预约」。
 3. 页面默认加载校服男生 `models/characters/schoolBoy.vrm`（跟随人物时使用男声），按人物尺寸适配正面全身；鼠标左键拖动可旋转，Shift + 左键拖动可平移，滚轮可缩放；点「恢复全身」回到默认视角。若需更换形象，在「演示人员设置」中选择其他 `.vrm` 文件。
-4. 可继续选择本地 `.vrma` 动作，七个场景动作统一放在 `models/animations/`，使用 `场景_序号.vrma` 命名。每次回复从同场景版本中随机选择；有多个版本时避免连续播放同一版本。添加版本后刷新页面即可使用。
+4. 默认待机已替换为医生接待式 `Idle_Doctor`（8 秒），讲解使用 `Explain_Gentle`（10 秒），以 10 帧过渡回到腹前叠手。旧讲解版本归档在 `models/animations/legacy/`，不参与随机播放。可继续选择本地 `.vrma` 动作，七个场景动作统一放在 `models/animations/`，使用 `场景_序号.vrma` 命名。每次回复从同场景版本中随机选择；有多个版本时避免连续播放同一版本。添加版本后刷新页面即可使用。
 5. 若当前浏览器不支持语音识别，页面会明确提示，文字输入仍可正常使用。
 6. 「问问健康」「查看提醒」「预约服务」无需打字即可使用；点击另一项常用服务会切换到该服务的新流程。
 7. 在「帮助与设置 → 演示人员设置 → 场景与氛围」点击缩略图更换医院场景；切换保留当前对话、预约步骤和人物。背景加载失败时保留原场景，可再次点击重试。
@@ -127,7 +127,7 @@ npm ci && npm run build:vrm && npm run test:browser
 | `greet_1.vrma` | 你好 / 您好 / 嗨 / 在吗 / hello |
 | `booking_1.vrma` | 预约 / 挂号 / 门诊 |
 | `thanks_1.vrma` | 谢谢 / 感谢 / 辛苦 |
-| `explain_1.vrma`、`explain_2.vrma` | 健康 / 不舒服 / 症状 / 头晕 / 头疼 / 血压 / 血糖 / 失眠 |
+| `explain_1.vrma`（Explain_Gentle） | 健康 / 不舒服 / 症状 / 头晕 / 头疼 / 血压 / 血糖 / 失眠 |
 | `alert_1.vrma` | 预警 / 异常 / 提醒 |
 | `confirm_1.vrma` | 确认 / 知道了 / 联系家人 |
 
@@ -240,7 +240,7 @@ The interface currently uses Chinese labels; English translations below identify
 1. Select **开始说话** (Start Speaking; no need to hold the button), or type a request. Use **放大文字** (Enlarge Text) to increase the font size. Example requests in Chinese: “我最近头晕”, “查看健康预警”, or “帮我预约门诊”.
 2. Use the large buttons below the reply to acknowledge an alert, choose a department and time, and confirm a booking. At any booking step, choose or type “取消预约” to cancel.
 3. The default character is the school boy, `models/characters/schoolBoy.vrm`, with a male voice preset, shown from the front in a full-body view. Drag with the left mouse button to rotate, Shift-drag to pan, and use the wheel to zoom. **恢复全身** (Restore Full Body) resets the view. Select another character in **演示人员设置** (Demo Character Settings), or load a local `.vrm` file.
-4. You can load and play a local `.vrma` animation. Put scene actions in `models/animations/` and name versions `scene_number.vrma`. The app randomly picks among versions for the same scene and avoids repeating the previous version when alternatives exist. Refresh the page after adding an action.
+4. The default idle is now `Idle_Doctor` (8 seconds), and explanations use `Explain_Gentle` (10 seconds), with a 10-frame transition back to folded hands. Previous explanation clips are archived in `models/animations/legacy/` and excluded from selection. You can load and play a local `.vrma` animation. Put scene actions in `models/animations/` and name versions `scene_number.vrma`. The app randomly picks among versions for the same scene and avoids repeating the previous version when alternatives exist. Refresh the page after adding an action.
 5. If speech recognition is unsupported, the page shows a message and typed input remains available. The quick actions **问问健康** (Ask About Health), **查看提醒** (View Alerts), and **预约服务** (Book a Service) work without typing; choosing another service starts its workflow.
 
 Alerts, family contact, and appointments are local simulations: they do not send messages or submit data to a hospital. Health information in the demo is not a medical diagnosis.
@@ -272,7 +272,7 @@ The legacy video tool starts from `app.py` (requires Gradio). Its command-line e
 | `greet_1.vrma` | 你好 / 您好 / 嗨 / 在吗 / hello |
 | `booking_1.vrma` | 预约 / 挂号 / 门诊 |
 | `thanks_1.vrma` | 谢谢 / 感谢 / 辛苦 |
-| `explain_1.vrma`, `explain_2.vrma` | 健康 / 不舒服 / 症状 / 头晕 / 头疼 / 血压 / 血糖 / 失眠 |
+| `explain_1.vrma` (Explain_Gentle) | 健康 / 不舒服 / 症状 / 头晕 / 头疼 / 血压 / 血糖 / 失眠 |
 | `alert_1.vrma` | 预警 / 异常 / 提醒 |
 | `confirm_1.vrma` | 确认 / 知道了 / 联系家人 |
 
@@ -305,4 +305,4 @@ The main application lives in `vrm_demo/`.
 - [Requirements document](docs/需求定义书.md) (Chinese)
 - [Technical design document](docs/技术设计文档.md) (Chinese)
 
-See [models/README.md](models/README.md) for character assets and the Blender idle-animation project. The page automatically reads the exported eight-second idle motion, including hair and clothing sway, a natural standing pose, blinking, and gaze tracking for mouse or touch input.
+See [models/README.md](models/README.md) for character assets and the Blender idle-animation project. The page loads the reviewed eight-second doctor idle with folded hands, breathing, blinking, and a gentle smile. VRM humanoid retargeting handles each character; live speech retains mouth control. Hair and clothing use the character’s own physics. The legacy JSON idle remains available as a loading fallback.

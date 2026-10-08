@@ -47,7 +47,9 @@ class SpeechTests(unittest.IsolatedAsyncioTestCase):
                 for body in [{"text":""}, {"text":"x"*501}, {"text":"hello", "voice_gender":"invalid"}]:
                     self.assertEqual((await client.post('/api/tts', json=body)).status_code,422)
                 catalog = (await client.get('/api/avatars')).json()
-                self.assertEqual(next(v for v in catalog if v['id']=='Harumasa')['voice_gender'],'male')
+                self.assertEqual({v['id'] for v in catalog}, set(server.avatar_files()))
+                for item in catalog:
+                    self.assertEqual(item['voice_gender'], gateway.voice_gender(item['id']))
                 for name in ('doctorBoy', 'schoolBoy'):
                     self.assertEqual(next(v for v in catalog if v['id']==name)['voice_gender'], 'male')
 

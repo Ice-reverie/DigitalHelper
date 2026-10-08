@@ -78,6 +78,7 @@ const ACTION_LABELS = { greet:'问候', explain:'讲解', alert:'预警提醒', 
 // Auto-blink and gaze pause during these actions; lip-sync keeps running.
 // Greet owns its reference smile/blink; live speech still owns the mouth.
 const FULL_EXPRESSION_ACTIONS = new Set(['explain', 'alert', 'booking', 'confirm', 'thanks', 'wink']);
+const HEALTH_TRANSITION_SECONDS = 10 / 30;
 const actionCache = new Map();
 let catalogPromise = null;
 const lastVariant = new Map();
@@ -335,16 +336,20 @@ function initThree() {
   scene.add(avatarGround);
 
   clock = new THREE.Clock();
+  // Reset the elapsed clock when returning from a hidden tab. Authored clips
+  // follow real time while visible; physics still uses a bounded timestep.
+  document.addEventListener('visibilitychange', () => clock.getDelta());
   const resizeObserver = new ResizeObserver(resizeStage);
   resizeObserver.observe(elements.stage);
   resizeStage();
   syncHospitalRenderer();
 
   renderer.setAnimationLoop(() => {
-    const delta = Math.min(clock.getDelta(), 0.05);
+    const elapsed = clock.getDelta();
+    const delta = Math.min(elapsed, 0.05);
     if (document.hidden) return;
     controls.update();
-    updateAvatar(delta);
+    updateAvatar(delta, elapsed);
     updateEnvironmentLights(delta);
     if (hospitalRenderMode === 'three') {
       footContact?.update(activeHospitalRoom?.floorY ?? 0);
@@ -1083,7 +1088,51 @@ function idleSample(time, duration, fps) {
 
 async function loadDefaultIdle(gltf, vrm, loadId, includeSecondary = defaultAvatar) {
   try {
-    const response = await fetch('/api/animations/idle');
+    const animation = await getIdleAnimation();
+    if (loadId !== modelLoadId || vrm !== currentVrm) return;
+    const sampler = createIdleSampler(animation, vrm);
+    idleAnimation = {sampler, duration:sampler.duration, time:0, authored:true};
+    blinking = false;
+    setModelStatus(`${currentAvatarName} 已就绪`, '医生接待式待机已适配，讲解结束后恢复腹前叠手；语音独立控制口型');
+  } catch (error) {
+    if (loadId !== modelLoadId || vrm !== currentVrm) return;
+    console.warn('医生待机加载失败，使用兼容待机', error);
+    await loadLegacyIdle(gltf, vrm, loadId, includeSecondary);
+  }
+}
+
+function getIdleAnimation() {
+  const key = 'Idle_Doctor';
+  if (!actionCache.has(key)) {
+    const pending = new Promise((resolve, reject) => {
+      createAnimationLoader().load('/api/animations/idle', gltf => {
+        const animation = gltf.userData.vrmAnimations?.[0];
+        animation ? resolve(animation) : reject(new Error('Empty idle animation'));
+      }, undefined, reject);
+    });
+    actionCache.set(key, pending);
+    pending.catch(() => { if (actionCache.get(key) === pending) actionCache.delete(key); });
+  }
+  return actionCache.get(key);
+}
+
+function createIdleSampler(animation, vrm) {
+  const clip = createVRMAnimationClip(filteredSceneAnimation(animation, 'preview', vrm), vrm);
+  if (!clip.tracks.length || !Number.isFinite(clip.duration) || clip.duration <= 0) throw new Error('Invalid idle clip');
+  // Evaluate directly every frame. An AnimationMixer may skip constant tracks
+  // after another action has written to the same bone or expression.
+  const bindings = clip.tracks.map(track => {
+    const path = THREE.PropertyBinding.parseTrackName(track.name);
+    const target = THREE.PropertyBinding.findNode(vrm.scene, path.nodeName);
+    if (!target || !['quaternion','position','weight'].includes(path.propertyName)) throw new Error(`Unsupported idle track: ${track.name}`);
+    return {target, property:path.propertyName, interpolant:track.createInterpolant()};
+  });
+  return {duration:clip.duration, bindings};
+}
+
+async function loadLegacyIdle(gltf, vrm, loadId, includeSecondary = defaultAvatar) {
+  try {
+    const response = await fetch('/api/animations/idle/legacy');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (data.version !== 1 || !Number.isFinite(data.duration) || data.duration <= 0 || !Number.isFinite(data.fps) || data.fps <= 0) throw new Error('Invalid idle format');
@@ -1104,6 +1153,16 @@ async function loadDefaultIdle(gltf, vrm, loadId, includeSecondary = defaultAvat
 
 function updateIdle(delta) {
   if (!idleAnimation) return false;
+  if (idleAnimation.authored) {
+    if (!motionReduced && !scenePlayback) idleAnimation.time = (idleAnimation.time + delta) % idleAnimation.duration;
+    const time = motionReduced ? 0 : idleAnimation.time;
+    for (const {target, property, interpolant} of idleAnimation.sampler.bindings) {
+      const value = interpolant.evaluate(time);
+      if (property === 'weight') target.weight = value[0];
+      else target[property].fromArray(value);
+    }
+    return true;
+  }
   if (!motionReduced) idleAnimation.time += delta;
   const { index, fraction } = idleSample(idleAnimation.time, idleAnimation.duration, idleAnimation.fps);
   for (const track of idleAnimation.tracks) {
@@ -1179,6 +1238,9 @@ function prepareIdleHands(vrm) {
 }
 
 function updateIdleHands(delta) {
+  // The approved idle includes wrists and every finger. Extra hand motion
+  // breaks the light contact between the palms and can reintroduce wrist kinks.
+  if (idleAnimation?.authored) return;
   if (!motionReduced) handIdleTime += Math.max(0,delta);
   for (const track of idleHands) {
     const movement = motionReduced ? 0 : track.amplitude*sampleHandIdle(handIdleTime+track.phase);
@@ -1432,7 +1494,9 @@ function stopSceneAnimation() {
 
 function playVrmAnimation(animation, loopMode, name = 'preview') {
   const from = new Map(modelPose.map(p => [p.name, { rotation:p.node.quaternion.clone(), position:p.node.position.clone() }]));
+  const fromExpressions = new Map((currentVrm.expressionManager?.expressions || []).map(e => [e.expressionName, e.weight]));
   stopSceneAnimation();
+  if (idleAnimation?.authored) idleAnimation.time = 0;
   const greetSmile = name === 'greet' ? createGreetSmile(currentVrm) : null;
   try {
   const filtered = filteredSceneAnimation(animation, name, currentVrm);
@@ -1465,6 +1529,7 @@ function playVrmAnimation(animation, loopMode, name = 'preview') {
   activeAction.clampWhenFinished = true;
   activeAction.play();
   scenePlayback = { name, greetSmile, fullExpression:(name === 'preview' || FULL_EXPRESSION_ACTIONS.has(name)), elapsed:0, duration:clip.duration, from, bindings,
+    transition:idleAnimation?.authored ? HEALTH_TRANSITION_SECONDS : .3, fromExpressions,
     expressions:[...filtered.expressionTracks.preset.keys(), ...filtered.expressionTracks.custom.keys()],
     bases:modelPose.map(p => ({...p, baseRotation:p.rotation.clone(), basePosition:p.position.clone()})),
   };
@@ -1487,18 +1552,26 @@ function updateSceneAnimation(delta) {
   if (!scenePlayback || !mixer) return;
   const state = scenePlayback;
   state.elapsed += delta;
+  const second = Math.floor(state.elapsed);
+  if (state.name === 'explain' && state.displayedSecond !== second) {
+    state.displayedSecond = second;
+    setModelStatus('正在讲解', `${Math.min(second, Math.ceil(state.duration))} / ${Math.ceil(state.duration)} 秒 · 结束后恢复腹前叠手`);
+  }
   for (const p of state.bases) {
     p.baseRotation.copy(p.node.quaternion);
     p.basePosition.copy(p.node.position);
   }
+  const baseExpressions = new Map(state.expressions.map(name => [name, currentVrm.expressionManager.getValue(name) || 0]));
   mixer.update(delta);
   // Always publish the sampled pose, including constant/held keyframes.
   for (const { target, proxy, property } of state.bindings) {
     if (property === 'weight') target.weight = proxy.weight;
     else target[property].copy(proxy[property]);
   }
-  const enter = Math.min(1, state.elapsed / .3);
-  const leave = Math.max(0, Math.min(1, (state.duration - state.elapsed) / .3));
+  const transition = state.transition || .3;
+  const smooth = t => t * t * (3 - 2 * t);
+  const enter = smooth(Math.min(1, state.elapsed / transition));
+  const leave = smooth(Math.max(0, Math.min(1, (state.duration - state.elapsed) / transition)));
   for (const p of state.bases) {
     const from = state.from.get(p.name);
     if (enter < 1) {
@@ -1512,7 +1585,9 @@ function updateSceneAnimation(delta) {
   }
   for (const name of state.expressions) {
     const value = currentVrm.expressionManager.getValue(name) || 0;
-    setExpression(name, value * Math.min(enter, leave));
+    const start = state.fromExpressions?.get(name) || 0;
+    const incoming = value * enter + start * (1 - enter);
+    setExpression(name, incoming * leave + baseExpressions.get(name) * (1 - leave));
   }
   updateGreetSecondary(state);
   if (state.elapsed >= state.duration) {
@@ -1739,17 +1814,19 @@ function updateVrmWithSpeechPriority(delta) {
   }
 }
 
-function updateAvatar(delta) {
+function updateAvatar(delta, animationDelta = delta) {
   if (!currentVrm) return;
   const now = performance.now();
   restoreModelPose();
   clearGreetSecondary();
-  const hasIdle = updateIdle(delta);
+  const hasIdle = updateIdle(animationDelta);
   updateIdleHands(delta);
-  updateSceneAnimation(delta);
+  updateSceneAnimation(animationDelta);
   updateGaze(delta);
 
-  if (!scenePlayback?.fullExpression && !(scenePlayback?.name === 'greet' && scenePlayback.expressions.includes('blink'))) updateBlink(now);
+  const authoredFace = idleAnimation?.authored && !motionReduced;
+  if (currentVrm.lookAt && !scenePlayback) currentVrm.lookAt.target = authoredFace ? null : gazeTarget;
+  if (!authoredFace && !scenePlayback?.fullExpression && !(scenePlayback?.name === 'greet' && scenePlayback.expressions.includes('blink'))) updateBlink(now);
   if (currentVisemes && audioContext) {
     const elapsed = audioContext.currentTime - currentVisemes.startTime;
     const timeline = currentVisemes.timeline;

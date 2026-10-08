@@ -1,0 +1,81 @@
+{
+  "revision": 2,
+  "status": "integrated",
+  "default_avatar": "schoolBoy",
+  "actions": [
+    {
+      "action": "Idle_Doctor",
+      "runtime": "../Idle_Doctor.vrma",
+      "endpoint": "/api/animations/idle",
+      "duration_seconds": 8,
+      "sha256": "4ec4156d154b16de86de67fb1da6ae7919fa1e898fa1376353f6ac612b14c179"
+    },
+    {
+      "action": "Explain_Gentle",
+      "runtime": "../explain_1.vrma",
+      "endpoint": "/api/animations/explain/explain_1",
+      "duration_seconds": 10,
+      "sha256": "8be023af3dc34afe5a5a69924f2fe3e0499876d3cf8fa64a0286dbf0660e79cc"
+    }
+  ],
+  "transition_frames": 10,
+  "fps": 30,
+  "adaptation": [
+    "VRM humanoid retargeting and library VRM0 axis conversion",
+    "Authored wrist/finger tracks replace procedural hand offsets",
+    "Authored eyes/blinks suppress competing idle face writers",
+    "Speech owns vowel shapes and jaw; expressions blend back to idle",
+    "Elapsed animation time separated from bounded physics timestep",
+    "Reduced motion uses common starting pose with automatic blinking",
+    "New idle failure falls back to the legacy JSON idle"
+  ],
+  "archive": "../legacy/; previous explanation variants excluded from catalog",
+  "validation": {
+    "python": {
+      "command": "python -m unittest discover -s tests -p test_*.py",
+      "passed": 76
+    },
+    "javascript": {
+      "command": "node --test tests/test_vrm_frontend.cjs tests/test_avatar_surface.cjs tests/test_hospital_scenes.cjs tests/test_hospital_rooms.cjs",
+      "total": 112,
+      "passed": 111,
+      "skipped": 1,
+      "skip_reason": "Optional AstraYao model is absent from current catalog; synthetic material tests still pass"
+    },
+    "browser": {
+      "command": "npm run test:browser",
+      "passed": true,
+      "avatars": [
+        "schoolBoy",
+        "doctorBoy",
+        "schoolGirl",
+        "studentGirl"
+      ],
+      "checks": [
+        "authored idle loaded",
+        "explain starts and returns to idle",
+        "greeting still works",
+        "missing 3D bundle retains conversation"
+      ]
+    },
+    "in_app_browser": {
+      "url": "http://127.0.0.1:8890/static/VRMCharacter.html",
+      "observed": [
+        "schoolBoy folded-hand idle",
+        "schoolBoy explanatory gesture and return",
+        "reduced-motion common pose",
+        "doctorBoy folded-hand idle and successful loading",
+        "default model restored"
+      ],
+      "errors": "No application errors in inspected browser logs"
+    },
+    "limits": "Cross-avatar smoke checks establish loading and lifecycle, not exhaustive continuous mesh collision checks for every character and camera angle."
+  },
+  "preserved": [
+    "Original model files",
+    "Original Blender authoring/review files",
+    "Existing greet/alert/booking/confirm/thanks/wink actions",
+    "User blockout Blender file",
+    "docs directory"
+  ]
+}

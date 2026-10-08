@@ -15,12 +15,13 @@ const models = [
 ];
 const modelFiles = new Map(models.map(model => [model.id,
   path.resolve(__dirname, `../models/characters/${model.id}.vrm`)]));
-const idle = path.resolve(__dirname, '../models/animations/Lumine_idle.json');
+const idle = path.resolve(__dirname, '../models/animations/Idle_Doctor.vrma');
+const explain = path.resolve(__dirname, '../models/animations/explain_1.vrma');
 const greet = path.resolve(__dirname, '../models/animations/greet_1.vrma');
 const edge = process.env.BROWSER_EXECUTABLE ||
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 
-test('real browser loads new avatars, plays greeting, and survives a missing 3D bundle',
+test('real browser loads four avatars, plays doctor idle and gentle explanation, and survives missing 3D',
   {skip: !fs.existsSync(edge) && 'Set BROWSER_EXECUTABLE to a Chromium browser'}, async () => {
     let unavailable3D = false;
     const server = http.createServer(async (request, response) => {
@@ -43,11 +44,15 @@ test('real browser loads new avatars, plays greeting, and survives a missing 3D 
         return fs.createReadStream(avatar).pipe(response);
       }
       if (pathname === '/api/animations/idle') {
-        response.writeHead(200, {'Content-Type':'application/json'});
+        response.writeHead(200, {'Content-Type':'model/gltf-binary'});
         return fs.createReadStream(idle).pipe(response);
       }
       if (pathname === '/api/animations') return json({greet:[{id:'greet_1', secondary:false}],
-        explain:[], alert:[], booking:[], confirm:[], thanks:[], wink:[]});
+        explain:[{id:'explain_1', secondary:false}], alert:[], booking:[], confirm:[], thanks:[], wink:[]});
+      if (pathname === '/api/animations/explain/explain_1') {
+        response.writeHead(200, {'Content-Type':'model/gltf-binary'});
+        return fs.createReadStream(explain).pipe(response);
+      }
       if (pathname === '/api/animations/greet/greet_1') {
         response.writeHead(200, {'Content-Type':'model/gltf-binary'});
         return fs.createReadStream(greet).pipe(response);
@@ -56,7 +61,7 @@ test('real browser loads new avatars, plays greeting, and survives a missing 3D 
         let body = '';
         for await (const chunk of request) body += chunk;
         const incoming = JSON.parse(body);
-        return json({reply:`收到：${incoming.text}`, action:incoming.text === '你好' ? 'greet' : null, context:{},
+        return json({reply:`收到：${incoming.text}`, action:incoming.text === '你好' ? 'greet' : incoming.text === '健康查询' ? 'explain' : null, context:{},
           quick_replies:[], segments:[{text:`收到：${incoming.text}`}]});
       }
       if (pathname === '/api/tts') return json({voice_gender:'male', segments:[{text:'播报'}]});
@@ -98,29 +103,37 @@ test('real browser loads new avatars, plays greeting, and survives a missing 3D 
           }
           assert.equal(await page.locator('#stage canvas').count(), 1);
         }
+        // Use keyboard activation: the existing dock continuously floats by 3 px.
         await page.locator('#text-input').fill('测试对话');
-        await page.locator('#send-btn').click();
+        await page.locator('#text-input').press('Enter');
         await page.locator('#messages').getByText('收到：测试对话', {exact:true}).waitFor();
         if (!broken) {
-          await page.locator('#help-btn').click();
+          await page.locator('#help-btn').press('Enter');
           await page.locator('#help-dialog details').evaluate(element => {element.open = true;});
           for (const model of models) {
             await page.locator('#avatar-select').selectOption(model.id);
-            await page.locator('#switch-avatar-btn').click();
+            await page.locator('#switch-avatar-btn').press('Enter');
             await page.waitForFunction(label => document.getElementById('model-status-title')
               ?.textContent.includes(`${label} 已就绪`), model.label, {timeout:15000});
+            assert.match(await page.locator('#model-status-detail').textContent(), /医生接待式待机/);
             assert.match(await page.locator('#avatar-voice-status').textContent(),
               model.voice_gender === 'male' ? /男声/ : /女声/);
             await page.locator('#help-dialog').evaluate(element => element.close());
+            await page.locator('#text-input').fill('健康查询');
+            await page.locator('#text-input').press('Enter');
+            await page.waitForFunction(() => document.getElementById('model-status-title')
+              ?.textContent === '正在讲解', null, {timeout:5000});
+            await page.waitForFunction(() => document.getElementById('model-status-title')
+              ?.textContent === '自然待机', null, {timeout:20000});
             await page.locator('#text-input').fill('你好');
-            await page.locator('#send-btn').click();
+            await page.locator('#text-input').press('Enter');
             try {
               await page.waitForFunction(() => document.getElementById('model-status-title')
                 ?.textContent.includes('正在问候'), null, {timeout:3000});
             } catch (error) {
               throw Error(`${model.id}: ${error.message}; status: ${await page.locator('#model-status-title').textContent()}; errors: ${errors.join(' | ')}`);
             }
-            await page.locator('#help-btn').click();
+            await page.locator('#help-btn').press('Enter');
             await page.locator('#help-dialog details').evaluate(element => {element.open = true;});
           }
           await page.locator('#help-dialog').evaluate(element => element.close());
