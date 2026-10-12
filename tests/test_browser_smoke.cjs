@@ -30,6 +30,15 @@ function silentWav(seconds) {
   return wav.toString('base64');
 }
 
+function assertForwardStance(state, label) {
+  for (const side of ['left', 'right']) {
+    const {hip, knee, ankle} = state.legPoints[side];
+    assert.ok(Math.abs(hip[0] - knee[0]) < .0002, `${label}/${side}: knee splays sideways`);
+    assert.ok(Math.abs(hip[0] - ankle[0]) < .0002, `${label}/${side}: foot splays sideways`);
+    assert.ok(knee[2] > Math.max(hip[2], ankle[2]), `${label}/${side}: knee bends forward`);
+  }
+}
+
 test('real browser loads four avatars, plays doctor idle and gentle explanation, and survives missing 3D',
   {skip: !fs.existsSync(edge) && 'Set BROWSER_EXECUTABLE to a Chromium browser'}, async () => {
     let unavailable3D = false;
@@ -97,6 +106,9 @@ test('real browser loads four avatars, plays doctor idle and gentle explanation,
         return response.end(fs.readFileSync(file,'utf8') + `\nwindow.avatarQA=()=>({
           action:scenePlayback?.name,phase:scenePlayback?.elapsed,
           voiceTime:currentVisemes ? audioContext.currentTime-currentVisemes.startTime : null,
+          legPoints:Object.fromEntries(['left','right'].map(side=>[side,Object.fromEntries(
+            [['hip','UpperLeg'],['knee','LowerLeg'],['ankle','Foot']].map(([key,part])=>
+              [key,currentVrm.humanoid.getRawBoneNode(side+part).getWorldPosition(new THREE.Vector3()).toArray()]))])),
           legs:Object.fromEntries(['leftUpperLeg','rightUpperLeg','leftLowerLeg','rightLowerLeg'].map(name=>{
             const q=currentVrm.scene.getWorldQuaternion(new THREE.Quaternion()).invert()
               .multiply(getBone(name).getWorldQuaternion(new THREE.Quaternion()));
@@ -146,6 +158,7 @@ test('real browser loads four avatars, plays doctor idle and gentle explanation,
               model.voice_gender === 'male' ? /男声/ : /女声/);
             await page.locator('#help-dialog').evaluate(element => element.close());
             const stance = await page.evaluate(()=>window.avatarQA());
+            assertForwardStance(stance, model.id+' idle');
             for (const [bone,q] of Object.entries(stance.legs)) {
               const twist=Math.abs(2*Math.atan2(q[1],q[3])*180/Math.PI)%360;
               assert.ok(Math.min(twist,360-twist)<5, `${model.id}/${bone}: axial twist ${twist}`);
@@ -159,6 +172,11 @@ test('real browser loads four avatars, plays doctor idle and gentle explanation,
             await page.waitForFunction(() => document.getElementById('model-status-title')
               ?.textContent === '正在讲解', null, {timeout:5000});
             const synchronized = await page.evaluate(()=>window.avatarQA());
+            assertForwardStance(synchronized, model.id+' explanation');
+            for (const side of ['left','right']) {
+              assert.ok(Math.hypot(...synchronized.legPoints[side].ankle.map((v,i)=>v-stance.legPoints[side].ankle[i]))<.0002,
+                model.id+': entering explanation keeps the planted feet');
+            }
             assert.notEqual(synchronized.voiceTime,null,'gesture starts only with actual audio');
             assert.ok(Math.abs(synchronized.phase-synchronized.voiceTime)<.15,'body and audio clocks stay together');
             if (process.env.AVATAR_QA_OUTPUT) {

@@ -2,6 +2,8 @@
 let THREE = globalThis.THREE || null;
 let GLTFLoader, OrbitControls, RoomEnvironment, VRMLoaderPlugin, VRMUtils;
 let VRMExpression, VRMExpressionMorphTargetBind, createVRMAnimationClip, VRMAnimationLoaderPlugin;
+let createForwardStance, applyForwardStanceToClip;
+let forwardStance = null;
 
 
 const elements = {
@@ -241,9 +243,11 @@ function renderHospitalFrame() {
 async function startAvatar() {
   try {
     if (!THREE) {
-      const [libraries, surfaces] = await Promise.all([
+      const [libraries, surfaces, stance] = await Promise.all([
         import('./vrm-dependencies.js?v=outpatient-3d'), import('./avatar-surface.js?v=3'),
+        import('./avatar-stance.js?v=1'),
       ]);
+      ({createForwardStance, applyForwardStanceToClip} = stance);
       ({tuneAvatarSurface, createFootContact, createAvatarShadowProxy} = surfaces);
       ({THREE, GLTFLoader, OrbitControls, RoomEnvironment, VRMLoaderPlugin, VRMUtils,
         VRMExpression, VRMExpressionMorphTargetBind, createVRMAnimationClip,
@@ -1021,6 +1025,7 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       VRMUtils.removeUnnecessaryJoints(gltf.scene);
       VRMUtils.rotateVRM0(vrm);
       await adaptAvatar(vrm, gltf, profile);
+      const preparedStance = createForwardStance(THREE, vrm);
       tuneAvatarSurface(vrm, avatar?.id || (url === '/api/avatar' ? DEFAULT_AVATAR.id : ''));
       if (loadId !== modelLoadId) { VRMUtils.deepDispose(gltf.scene); return; }
       const leftArm = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
@@ -1043,6 +1048,7 @@ function loadVrm(url, name, release = () => {}, avatar = null) {
       // Also cancel speech started while this model was still downloading.
       stopCurrentSpeech();
       currentVrm = vrm;
+      forwardStance = preparedStance;
       currentAvatarName = name;
       currentAvatarId = avatar?.id || (url === '/api/avatar' ? DEFAULT_AVATAR.id : '');
       refreshAvatarVoice();
@@ -1179,6 +1185,7 @@ function getIdleAnimation() {
 
 function createIdleSampler(animation, vrm) {
   const clip = createVRMAnimationClip(filteredSceneAnimation(animation, 'preview', vrm), vrm);
+  if (forwardStance) applyForwardStanceToClip(THREE, clip, forwardStance);
   if (!clip.tracks.length || !Number.isFinite(clip.duration) || clip.duration <= 0) throw new Error('Invalid idle clip');
   // Evaluate directly every frame. An AnimationMixer may skip constant tracks
   // after another action has written to the same bone or expression.
@@ -1570,6 +1577,7 @@ function playVrmAnimation(animation, loopMode, name = 'preview') {
   try {
   const filtered = filteredSceneAnimation(animation, name, currentVrm);
   const clip = createVRMAnimationClip(filtered, currentVrm);
+  if (name === 'explain' && forwardStance) applyForwardStanceToClip(THREE, clip, forwardStance);
   if (!clip.tracks.length || !Number.isFinite(clip.duration) || clip.duration <= 0) throw new Error('Empty clip');
   // Sample on an isolated rig: PropertyMixer skips unchanged values, so it must
   // never share its targets with the idle writer or our transition blending.
