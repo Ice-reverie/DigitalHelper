@@ -2,10 +2,15 @@ import asyncio
 import io
 import json
 import os
+import ssl
 import unittest
 import wave
+import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs, urlsplit
 
+import aiohttp
 import httpx
 from vrm_demo import tts_gateway as gateway, vrm_server as server
 
@@ -101,3 +106,85 @@ class SpeechTests(unittest.IsolatedAsyncioTestCase):
             health = await server.health()
             self.assertTrue(health['tts_configured'])
             self.assertNotIn('test-secret',json.dumps(health))
+
+    async def test_edge_migrated_websocket_preserves_voice_audio_and_tls(self):
+        # Exercise the installed client's actual wire protocol, not a fake Communicate.
+        transport = gateway.edge_tts.communicate
+        legacy = ('wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1'
+                  '?TrustedClientToken=test-client-token')
+        messages = []
+        requests = []
+        payload = audio_fixture()
+
+        class Context:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class Socket(Context):
+            async def send_str(self, value):
+                messages.append(value)
+
+            async def __aiter__(self):
+                headers = b'X-RequestId:test\r\nContent-Type:audio/mpeg\r\nPath:audio\r\n'
+                yield SimpleNamespace(type=aiohttp.WSMsgType.BINARY,
+                                      data=len(headers).to_bytes(2, 'big') + headers + payload)
+                yield SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data='Path:turn.end\r\n\r\n')
+
+        class Session(Context):
+            def ws_connect(self, url, **kwargs):
+                requests.append((url, kwargs))
+                return Socket()
+
+        with patch.object(transport, 'WSS_URL', legacy), \
+             patch.object(transport.aiohttp, 'ClientSession', return_value=Session()), \
+             patch.dict(os.environ, {'DIGITALHELPER_TTS_EDGE_VOICE_FEMALE': 'zh-CN-XiaoyiNeural'}):
+            for _ in range(2):
+                self.assertEqual(await gateway.edge_speech('您好 <用户>', 'female'), payload)
+
+        self.assertEqual(len(requests), 2)  # No failed legacy request on each sentence.
+        for url, options in requests:
+            parsed = urlsplit(url)
+            self.assertEqual(parsed.scheme, 'wss')
+            self.assertEqual(parsed.netloc, 'api.msedgeservices.com')
+            self.assertEqual(parsed.path, '/tts/cognitiveservices/websocket/v1')
+            params = parse_qs(parsed.query)
+            self.assertEqual(params['Ocp-Apim-Subscription-Key'], ['test-client-token'])
+            self.assertNotIn('TrustedClientToken', params)
+            self.assertTrue(params['ConnectionId'][0])
+            self.assertTrue(params['Sec-MS-GEC'][0])
+            self.assertEqual(options['ssl'].verify_mode, ssl.CERT_REQUIRED)
+            self.assertTrue(options['ssl'].check_hostname)
+        self.assertIn('audio-24khz-48kbitrate-mono-mp3', messages[0])
+        ssml = ET.fromstring(messages[1].split('\r\n\r\n', 1)[1])
+        namespace = {'s': 'http://www.w3.org/2001/10/synthesis'}
+        voice = ssml.find('s:voice', namespace)
+        self.assertTrue(voice.attrib['name'].endswith('(zh-CN, XiaoyiNeural)'))
+        prosody = voice.find('s:prosody', namespace)
+        self.assertEqual(prosody.attrib['rate'], '+15%')
+        self.assertEqual(prosody.text, '您好 <用户>')
+
+    def test_edge_compatibility_leaves_future_upstream_endpoint_untouched(self):
+        transport = gateway.edge_tts.communicate
+        urls = [
+            'wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v2?new=value',
+            'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v2?new=value',
+        ]
+        for url in urls:
+            with self.subTest(url=url), patch.object(transport, 'WSS_URL', url):
+                gateway._configure_edge_endpoint()
+                self.assertEqual(transport.WSS_URL, url)
+
+    async def test_edge_http_failure_is_logged_without_url_or_content(self):
+        error = aiohttp.WSServerHandshakeError(
+            None, (), status=403, message='test-secret private text https://secret.invalid/?token=secret')
+        with patch.object(gateway, 'edge_speech', side_effect=error), \
+             self.assertLogs(gateway.logger) as logs:
+            self.assertEqual(await gateway.synthesize('private text', 'female'), b'')
+        output = str(logs.output)
+        self.assertIn('WSServerHandshakeError, HTTP 403', output)
+        self.assertIn('browser fallback', output)
+        for sensitive in ['test-secret', 'private text', 'secret.invalid', 'token=']:
+            self.assertNotIn(sensitive, output)

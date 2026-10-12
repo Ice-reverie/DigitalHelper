@@ -3,7 +3,7 @@ import asyncio
 import io
 import logging
 import os
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 try:
     import httpx
@@ -80,9 +80,39 @@ async def external_speech(config, text, gender):
     return audio
 
 
+def _configure_edge_endpoint():
+    """Bridge edge-tts 7.2.8 to Edge's migrated synthesis endpoint.
+
+    Upstream fix: https://github.com/rany2/edge-tts/pull/491
+    Only adapt the known legacy URL, leaving future upstream URLs untouched.
+    The change is process-local; installed packages and voice-list URLs stay intact.
+    """
+    transport = edge_tts.communicate
+    current = urlsplit(getattr(transport, "WSS_URL", ""))
+    if (current.scheme, current.netloc, current.path) != (
+            "wss", "speech.platform.bing.com", "/consumer/speech/synthesize/readaloud/edge/v1"):
+        return
+    query = parse_qs(current.query)
+    if set(query) != {"TrustedClientToken"} or len(query["TrustedClientToken"]) != 1:
+        return
+    transport.WSS_URL = (
+        "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1?"
+        + urlencode({"Ocp-Apim-Subscription-Key": query["TrustedClientToken"][0]}))
+
+
+def _failure_summary(error):
+    """Never log exception text: it can contain tokens, URLs or user content."""
+    status_code = getattr(error, "status", None)
+    if status_code is None:
+        status_code = getattr(getattr(error, "response", None), "status_code", None)
+    suffix = f", HTTP {status_code}" if isinstance(status_code, int) else ""
+    return type(error).__name__ + suffix
+
+
 async def edge_speech(text, gender):
     if edge_tts is None:
         return b""
+    _configure_edge_endpoint()
     default = "zh-CN-YunxiNeural" if gender == "male" else "zh-CN-XiaoxiaoNeural"
     voice = os.getenv("DIGITALHELPER_TTS_EDGE_VOICE_" + gender.upper(), "").strip() or default
     data = bytearray()
@@ -99,10 +129,10 @@ async def synthesize(text, gender, timeout=15):
     if config:
         try:
             return await asyncio.wait_for(external_speech(config, text, gender), timeout)
-        except Exception:
-            logger.warning("External speech unavailable; falling back to Edge TTS")
+        except Exception as error:
+            logger.warning("External speech unavailable (%s); falling back to Edge TTS", _failure_summary(error))
     try:
         return await asyncio.wait_for(edge_speech(text, gender), timeout)
-    except Exception:
-        logger.warning("Edge speech unavailable; using browser fallback")
+    except Exception as error:
+        logger.warning("Edge speech unavailable (%s); using browser fallback", _failure_summary(error))
         return b""

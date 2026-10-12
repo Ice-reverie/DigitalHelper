@@ -106,6 +106,8 @@ MySQL 连接、建表和测试库重置说明见 [数据库接入说明](docs/da
 
 文字回复先显示，语音再按句请求和播放；某句在线合成或播放失败时，使用浏览器语音补播该句。后端顺序合成句子，口型分析最多并行处理 3 句；每种在线语音服务单次请求最多等待 15 秒。口型时间轴需要额外安装 `av` 并使用仓库内的 Rhubarb 工具；缺少这些组件不影响文字对话和备用口型。
 
+在线语音使用 `edge-tts>=7.2.8,<8`。针对 2026 年 10 月旧合成地址返回 403 的问题，服务端按 [上游修复 #491](https://github.com/rany2/edge-tts/pull/491) 将已知旧地址适配到 `api.msedgeservices.com`，保持原有声音、语速及 TLS 校验。此兼容处理随项目代码生效，无需手动修改 Python 安装目录；将来依赖改用新地址时不会覆盖它。合成失败日志仅记录错误类型与 HTTP 状态，不输出令牌或朗读文本。排查时以 `/api/tts` 是否返回实际音频为准，`/api/health` 的语音依赖状态不代表上游实时连通性。
+
 ### 开发验证与旧素材工具
 
 ```bash
@@ -250,6 +252,8 @@ Alerts, family contact, and appointments are local simulations: they do not send
 The checked-in `digitalhelper_demo.sqlite3` contains fictional data only. Database use is off by default. Set `DIGITALHELPER_DB_ENABLED=true` and `DIGITALHELPER_DB_BACKEND=sqlite` in the root `.env`, then restart the server. The application copies the seed to the Git-ignored `output/digitalhelper_demo.sqlite3`, where demo bookings and alert choices are saved. It adds fictional slots for the next 14 days as needed. “People ahead” counts earlier confirmed demo bookings in the same department, date, and time slot; it is not a live hospital queue. Switching the feature off restores the original rule-based flow. See [database integration](docs/database-integration.md) for MySQL setup and data details.
 
 Text replies appear before speech. Audio is requested and played sentence by sentence; if online synthesis or playback fails for a sentence, the browser attempts to speak that sentence. The backend synthesizes sentences in sequence and analyzes up to three lip-sync segments concurrently. Each online speech service has a 15-second limit per request. Rhubarb timelines require the included Rhubarb tool and the optional `av` package; missing components do not prevent text chat or fallback lip sync.
+
+Online speech requires `edge-tts>=7.2.8,<8`. Following [upstream fix #491](https://github.com/rany2/edge-tts/pull/491), the gateway adapts the known legacy synthesis URL to `api.msedgeservices.com` after the October 2026 HTTP 403 failures. Voice settings and TLS verification are preserved. This project-local compatibility fix does not edit installed packages or overwrite future upstream endpoints. Failure logs contain only the error type and HTTP status, never tokens or spoken text. Verify connectivity using actual audio from `/api/tts`; dependency status in `/api/health` is not a live upstream check.
 
 ### Development checks and legacy media tools
 
