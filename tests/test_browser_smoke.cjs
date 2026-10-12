@@ -21,6 +21,15 @@ const greet = path.resolve(__dirname, '../models/animations/greet_1.vrma');
 const edge = process.env.BROWSER_EXECUTABLE ||
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 
+function silentWav(seconds) {
+  const rate=8000, bytes=Math.round(seconds*rate)*2, wav=Buffer.alloc(44+bytes);
+  wav.write('RIFF');wav.writeUInt32LE(36+bytes,4);wav.write('WAVEfmt ',8);
+  wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);
+  wav.writeUInt32LE(rate,24);wav.writeUInt32LE(rate*2,28);wav.writeUInt16LE(2,32);
+  wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(bytes,40);
+  return wav.toString('base64');
+}
+
 test('real browser loads four avatars, plays doctor idle and gentle explanation, and survives missing 3D',
   {skip: !fs.existsSync(edge) && 'Set BROWSER_EXECUTABLE to a Chromium browser'}, async () => {
     let unavailable3D = false;
@@ -61,10 +70,15 @@ test('real browser loads four avatars, plays doctor idle and gentle explanation,
         let body = '';
         for await (const chunk of request) body += chunk;
         const incoming = JSON.parse(body);
-        return json({reply:`收到：${incoming.text}`, action:incoming.text === '你好' ? 'greet' : incoming.text === '健康查询' ? 'explain' : null, context:{},
+        return json({reply:`收到：${incoming.text}`, action:incoming.text === '你好' ? 'greet' : ['健康查询','长讲解测试'].includes(incoming.text) ? 'explain' : null, context:{},
           quick_replies:[], segments:[{text:`收到：${incoming.text}`}]});
       }
-      if (pathname === '/api/tts') return json({voice_gender:'male', segments:[{text:'播报'}]});
+      if (pathname === '/api/tts') {
+        let body='';for await (const chunk of request) body+=chunk;
+        const {text}=JSON.parse(body);
+        await new Promise(resolve=>setTimeout(resolve,250));
+        return json({voice_gender:'male', segments:[{text, audio:silentWav(text.includes('长讲解测试') ? 12.2 : 2.4), visemeTimeline:[]}]});
+      }
       if (pathname === '/static/js/vrm-dependencies.js' && unavailable3D) {
         response.writeHead(503, {'Content-Type':'text/javascript', 'Cache-Control':'no-store'});
         return response.end('');
@@ -78,6 +92,18 @@ test('real browser loads four avatars, plays doctor idle and gentle explanation,
       const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' :
         file.endsWith('.html') ? 'text/html' : 'application/octet-stream';
       response.writeHead(200, {'Content-Type':type, 'Cache-Control':'no-store'});
+      if (relative === 'js/VRMCharacter.js') {
+        // Test-server-only observations of the actual mixer and Web Audio clock.
+        return response.end(fs.readFileSync(file,'utf8') + `\nwindow.avatarQA=()=>({
+          action:scenePlayback?.name,phase:scenePlayback?.elapsed,
+          voiceTime:currentVisemes ? audioContext.currentTime-currentVisemes.startTime : null,
+          legs:Object.fromEntries(['leftUpperLeg','rightUpperLeg','leftLowerLeg','rightLowerLeg'].map(name=>{
+            const q=currentVrm.scene.getWorldQuaternion(new THREE.Quaternion()).invert()
+              .multiply(getBone(name).getWorldQuaternion(new THREE.Quaternion()));
+            return [name,q.toArray()];
+          }))
+        });`);
+      }
       fs.createReadStream(file).pipe(response);
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -85,7 +111,7 @@ test('real browser loads four avatars, plays doctor idle and gentle explanation,
     try {
       for (const broken of [false, true]) {
         unavailable3D = broken;
-        const context = await browser.newContext();
+        const context = await browser.newContext({viewport:{width:1280,height:960}});
         const page = await context.newPage();
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
@@ -119,10 +145,25 @@ test('real browser loads four avatars, plays doctor idle and gentle explanation,
             assert.match(await page.locator('#avatar-voice-status').textContent(),
               model.voice_gender === 'male' ? /男声/ : /女声/);
             await page.locator('#help-dialog').evaluate(element => element.close());
+            const stance = await page.evaluate(()=>window.avatarQA());
+            for (const [bone,q] of Object.entries(stance.legs)) {
+              const twist=Math.abs(2*Math.atan2(q[1],q[3])*180/Math.PI)%360;
+              assert.ok(Math.min(twist,360-twist)<5, `${model.id}/${bone}: axial twist ${twist}`);
+            }
+            if (process.env.AVATAR_QA_OUTPUT) {
+              fs.mkdirSync(process.env.AVATAR_QA_OUTPUT,{recursive:true});
+              await page.screenshot({path:path.join(process.env.AVATAR_QA_OUTPUT,model.id+'-idle.png')});
+            }
             await page.locator('#text-input').fill('健康查询');
             await page.locator('#text-input').press('Enter');
             await page.waitForFunction(() => document.getElementById('model-status-title')
               ?.textContent === '正在讲解', null, {timeout:5000});
+            const synchronized = await page.evaluate(()=>window.avatarQA());
+            assert.notEqual(synchronized.voiceTime,null,'gesture starts only with actual audio');
+            assert.ok(Math.abs(synchronized.phase-synchronized.voiceTime)<.15,'body and audio clocks stay together');
+            if (process.env.AVATAR_QA_OUTPUT) {
+              await page.screenshot({path:path.join(process.env.AVATAR_QA_OUTPUT,model.id+'-speaking.png')});
+            }
             await page.waitForFunction(() => document.getElementById('model-status-title')
               ?.textContent === '自然待机', null, {timeout:20000});
             await page.locator('#text-input').fill('你好');
@@ -137,6 +178,17 @@ test('real browser loads four avatars, plays doctor idle and gentle explanation,
             await page.locator('#help-dialog details').evaluate(element => {element.open = true;});
           }
           await page.locator('#help-dialog').evaluate(element => element.close());
+          await page.locator('#text-input').fill('长讲解测试');
+          await page.locator('#text-input').press('Enter');
+          await page.waitForFunction(()=>window.avatarQA().voiceTime>10.3,null,{timeout:16000});
+          const longReply=await page.evaluate(()=>window.avatarQA());
+          assert.equal(longReply.action,'explain','a long reply continues after the first clip cycle');
+          assert.ok(Math.abs(longReply.phase-longReply.voiceTime%10)<.15);
+          // Interrupt real audio in the middle of a gesture, then ensure a
+          // text-only response cannot resurrect the cancelled action.
+          await page.locator('#text-input').fill('结束测试');
+          await page.locator('#text-input').press('Enter');
+          await page.waitForFunction(()=>!window.avatarQA().action,null,{timeout:3000});
         }
         assert.deepEqual(errors, []);
         await context.close();

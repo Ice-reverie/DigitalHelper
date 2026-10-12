@@ -29,6 +29,23 @@ class HealthIdleTests(unittest.TestCase):
         self.assertTrue({'blink', 'happy'} <= presets.keys())
         self.assertFalse({'aa', 'ih', 'ou', 'ee', 'oh'} & presets.keys())
 
+    def test_legs_do_not_inherit_the_source_knee_plane_as_axial_twist(self):
+        # A planted foot alone does not prove a healthy knee: V2 kept the feet
+        # fixed while twisting the thighs and shins outward by ~32 degrees.
+        for frame in self.world:
+            for side in ('left', 'right'):
+                for part in ('UpperLeg', 'LowerLeg'):
+                    x, y, z, w = frame[side+part][1]
+                    twist = abs(math.degrees(2*math.atan2(y, w))) % 360
+                    twist = min(twist, 360-twist)
+                    self.assertLess(twist, 5, (side+part, twist))
+                hip = frame[side+'UpperLeg'][0]
+                knee = frame[side+'LowerLeg'][0]
+                ankle = frame[side+'Foot'][0]
+                # VRMA is +Z forward. Knees bend forward, not sideways/back.
+                self.assertGreater(knee[2], max(hip[2], ankle[2]))
+                self.assertLess(abs(knee[0]-(hip[0]+ankle[0])/2), .02)
+
 
 class HealthExplainTests(HealthIdleTests):
     ASSET = 'explain_1.vrma'

@@ -14,7 +14,7 @@
   <div class="eyebrow">ANXIN · MOTION REVIEW <span class="badge">关节修正版 V2 · 已接入</span></div>
   <h1>安心健康助手 · 动作预览</h1>
   <p>校服男孩 · 基于现有骨骼制作。左侧为正面，右侧为前侧 45°。</p>
-  <p>已调整右肘扭转、叠手折腕与回收路径。<a href="joint_compare.html">查看修正前后近景对比 →</a></p>
+  <p>本页视频是 V2 历史审核记录。主应用及下方工程、动作下载已更新至 V3，修正腿部朝向并接入语音同步；当前腿部效果请在主应用查看。<a href="joint_compare.html">查看 V2 手臂修正对比 →</a></p>
   <nav role="tablist" aria-label="选择动作">
     <button type="button" role="tab" aria-selected="true" data-clip="idle">医生接待式待机</button>
     <button type="button" role="tab" aria-selected="false" data-clip="explain">温和讲解</button>
@@ -27,10 +27,10 @@
     <aside><h2 id="title">医生接待式待机</h2><p id="summary">双手腹前轻搭，安静等待用户开口。</p>
       <dl><dt>Action</dt><dd id="action">Idle_Doctor</dd><dt>帧率</dt><dd>30 fps / Base 1</dd><dt>单次时长</dt><dd id="duration">8 秒</dd><dt>播放帧</dt><dd id="frames">F1–F240</dd><dt>闭合关键帧</dt><dd id="closure">F241 = F1</dd></dl>
       <ul id="details"><li>两个舒缓呼吸周期</li><li>自然眨眼与轻微微笑</li><li>双脚和根节点固定</li></ul>
-      <p class="note">此版本已接入主应用的待机与讲解。口型由语音同步系统独立驱动。</p>
+      <p class="note">当前视频保留 V2，未重新渲染。主应用使用 V3 腿部修正与播报时钟；口型由语音系统独立驱动。</p>
     </aside>
   </div>
-  <div class="downloads"><a href="Anxin_Health_Actions.blend?v=2" download>Blender 工程</a><a id="clip-download" href="Idle_Doctor.vrma?v=2" download>下载此动作 VRMA</a><a href="README.md">制作与检查说明</a></div>
+  <div class="downloads"><a href="Anxin_Health_Actions.blend?v=3" download>Blender 工程 V3</a><a id="clip-download" href="Idle_Doctor.vrma?v=3" download>下载此动作 VRMA V3</a><a href="README.md">制作与检查说明</a></div>
 </main>
 <script>
 const clips={
@@ -44,7 +44,7 @@ document.querySelectorAll('[data-clip]').forEach(button=>button.addEventListener
  for(const key of ['title','summary','action','duration','frames','closure'])document.getElementById(key).textContent=item[key];
  document.querySelector('#details').replaceChildren(...item.details.map(text=>{const li=document.createElement('li');li.textContent=text;return li}));
  document.querySelectorAll('[data-clip]').forEach(tab=>tab.setAttribute('aria-selected',String(tab===button)));
- const link=document.querySelector('#clip-download');link.hidden=current==='transition';link.href=item.action+'.vrma?v=2';video.play().catch(()=>{});
+ const link=document.querySelector('#clip-download');link.hidden=current==='transition';link.href=item.action+'.vrma?v=3';video.play().catch(()=>{});
 }));
 document.querySelector('#speed').addEventListener('click',event=>{video.playbackRate=video.playbackRate===1?.5:1;event.currentTarget.textContent='播放速度：'+video.playbackRate+'×'});
 video.addEventListener('timeupdate',()=>{const item=clips[current],cycle=Math.min(item.cycles,Math.floor(video.currentTime/item.length)+1);document.querySelector('#status').textContent=(item.cycles>1?'第 '+cycle+' / 3 周期 · ':'')+video.currentTime.toFixed(1)+' / '+(item.length*item.cycles).toFixed(1)+' 秒'});

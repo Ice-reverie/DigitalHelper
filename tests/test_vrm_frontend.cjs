@@ -42,6 +42,108 @@ function frontend() {
   return { context, sandbox, elements, service, classes, run: (code) => vm.runInContext(code, context) };
 }
 
+// Real Three.js sampling, with a deterministic speech clock and a tiny rig.
+async function replyMotionFixture() {
+  const f = frontend();
+  f.sandbox.testThree = require('three');
+  f.run(`THREE=testThree;
+    testBone=new THREE.Object3D();testBone.name='MotionTestBone';
+    currentVrm={scene:new THREE.Group(),expressionManager:{expressions:[],getValue(){return 0},setValue(){}}};
+    currentVrm.scene.add(testBone);
+    modelPose=[{name:'spine',node:testBone,rotation:testBone.quaternion.clone(),position:testBone.position.clone()}];
+    clip=new THREE.AnimationClip('Explain_Gentle',10,[new THREE.VectorKeyframeTrack(testBone.uuid+'.position',[0,5,10],[0,0,0,1,0,0,0,0,0])]);
+    createVRMAnimationClip=()=>clip;
+    filteredSceneAnimation=()=>({expressionTracks:{preset:new Map(),custom:new Map()}});
+    getAnimationCatalog=async()=>({explain:[{id:'explain_1',secondary:false}]});
+    getSceneAnimation=async()=>({});
+    updateIdle=()=>true;
+    now=0;tick=delta=>{restoreModelPose();updateSceneAnimation(delta);};
+    queueReplyMotion('explain',speechGeneration);`);
+  await new Promise(resolve => setImmediate(resolve));
+  return f;
+}
+
+test('reply gesture waits for actual browser speech start, including delayed TTS', async () => {
+  const f = await replyMotionFixture();
+  assert.equal(f.run('scenePlayback'), null);
+  let utterance;
+  f.sandbox.window.speechSynthesis = {speak(value){utterance=value;}};
+  const playing = f.run("speakWithBrowser('正在讲解')");
+  assert.equal(f.run('scenePlayback'), null, 'queued speech is not audible yet');
+  utterance.onstart();
+  assert.equal(f.run('scenePlayback.name'), 'explain');
+  utterance.onend();
+  await playing;
+  f.run('endReplyMotion();tick(.34);');
+  assert.equal(f.run('scenePlayback'), null);
+});
+
+test('Web Audio starts the gesture after decoding and uses the source playback clock', async () => {
+  const f = await replyMotionFixture();
+  let finishDecode, source;
+  f.sandbox.makeSource=()=>{source={connect(){},disconnect(){},start(){},stop(){}};return source;};
+  f.sandbox.decode=()=>new Promise(resolve=>{finishDecode=resolve;});
+  f.run(`audioContext={state:'running',currentTime:7,destination:{},decodeAudioData:decode,
+    createBufferSource:makeSource,createAnalyser(){return {connect(){},disconnect(){},frequencyBinCount:128};}};`);
+  const playing=f.run("playSegments([{audio:'AQ==',text:'测试'}],'female',false)");
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.run('scenePlayback'),null);
+  finishDecode({duration:2});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.run('scenePlayback.name'),'explain');
+  f.run('audioContext.currentTime=8;tick(.34);');
+  assert.equal(f.run('scenePlayback.elapsed'),1);
+  f.run('audioContext.currentTime=12;');
+  source.onended();await playing;
+  assert.equal(f.run('replyMotion.elapsed'),2,'end callback delay is not counted as speech');
+  f.run('endReplyMotion();tick(.34);');
+  assert.equal(f.run('scenePlayback'),null);
+});
+
+test('speech clock drives long gestures, freezes through buffering, then returns to idle', async () => {
+  const f = await replyMotionFixture();
+  f.run('token=startReplyMotionSegment(speechGeneration,()=>now);now=4;tick(.34);');
+  assert.equal(f.run('scenePlayback.elapsed'), 4);
+  assert.ok(Math.abs(f.run('testBone.position.x') - .8) < 1e-6);
+  f.run('now=12;tick(.01);'); // Delayed rendering must still follow audio time.
+  assert.equal(f.run('scenePlayback.elapsed'), 2, '10-second clip loops while speech continues');
+  f.run('finishReplyMotionSegment(token);now=40;tick(.34);');
+  assert.equal(f.run('scenePlayback.elapsed'), 2, 'buffering does not consume gesture time');
+  assert.equal(f.run('testBone.position.x'), 0, 'buffering eases into idle');
+  f.run('now=0;token=startReplyMotionSegment(speechGeneration,()=>now);now=3;tick(.34);');
+  assert.equal(f.run('scenePlayback.elapsed'), 5, 'next sentence continues cumulative audio time');
+  f.run('endReplyMotion();tick(.17);');
+  assert.ok(f.run('testBone.position.x') > 0 && f.run('testBone.position.x') < 1);
+  f.run('tick(.17);');
+  assert.equal(f.run('scenePlayback'), null);
+  assert.equal(f.run('testBone.position.x'), 0);
+});
+
+test('interruptions and late animation loads cannot restart a completed reply gesture', async () => {
+  const f = await replyMotionFixture();
+  f.run('token=startReplyMotionSegment(speechGeneration,()=>now);now=4;tick(.34);stopCurrentSpeech();tick(.34);');
+  assert.equal(f.run('replyMotion'), null);
+  assert.equal(f.run('scenePlayback'), null);
+  f.run(`getSceneAnimation=()=>new Promise(resolve=>lateMotion=resolve);
+    queueReplyMotion('explain',speechGeneration);`);
+  await new Promise(resolve => setImmediate(resolve));
+  f.run('startReplyMotionSegment(speechGeneration,()=>0);endReplyMotion();lateMotion({});');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.run('scenePlayback'), null);
+});
+
+test('text-only replies and reduced motion never start a speech gesture', async () => {
+  const f = await replyMotionFixture();
+  f.run('fetchSpeechPart=async part=>part;');
+  const result = await f.run("playReplySegments([{text:'仅显示文字'}],{},speechGeneration)");
+  assert.equal(result.failed, 1);
+  assert.equal(f.run('replyMotion'), null);
+  assert.equal(f.run('scenePlayback'), null);
+  f.run("motionReduced=true;queueReplyMotion('explain',speechGeneration);startReplyMotionSegment(speechGeneration,()=>0);");
+  assert.equal(f.run('replyMotion'), null);
+  assert.equal(f.run('scenePlayback'), null);
+});
+
 test('large text toggles reversibly with an accessible pressed state', () => {
   const f = frontend();
   const button = f.elements.get('font-size-btn');
@@ -768,6 +870,18 @@ test('seven-second explain secondary tracks use their own timeline and return to
     state={name:'explain',elapsed:7,secondary:[{values:explainCloth.tracks[0].values,fps:24,target:{quaternion:q},current:q,next:q}]};
     updateGreetSecondary(state);`);
   assert.equal(f.run('sampleIndex'),168*4);
+});
+
+test('secondary sleeve and twist bones fade with the body during speech gaps', () => {
+  const f=frontend();f.sandbox.testThree=require('three');
+  f.run(`THREE=testThree;defaultAvatar=true;
+    target={quaternion:new THREE.Quaternion()};
+    rotation=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),Math.PI/3).toArray();
+    state={elapsed:.5,secondary:[{values:[...rotation,...rotation],fps:1,target,current:new THREE.Quaternion(),next:new THREE.Quaternion()}]};
+    updateGreetSecondary(state,.5);`);
+  assert.ok(Math.abs(f.run('target.quaternion.angleTo(new THREE.Quaternion())')-Math.PI/6)<1e-6);
+  f.run('clearGreetSecondary();updateGreetSecondary(state,0);');
+  assert.equal(f.run('target.quaternion.angleTo(new THREE.Quaternion())'),0);
 });
 
 test('late scene loads and previous-model loads cannot replace current actions', async () => {

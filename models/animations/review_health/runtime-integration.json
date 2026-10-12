@@ -1,5 +1,5 @@
 {
-  "revision": 2,
+  "revision": 3,
   "status": "integrated",
   "default_avatar": "schoolBoy",
   "actions": [
@@ -8,14 +8,14 @@
       "runtime": "../Idle_Doctor.vrma",
       "endpoint": "/api/animations/idle",
       "duration_seconds": 8,
-      "sha256": "4ec4156d154b16de86de67fb1da6ae7919fa1e898fa1376353f6ac612b14c179"
+      "sha256": "369bc0e46739d552adf1090b671e83943a9a88f0132b1aa2dcedf987553d7403"
     },
     {
       "action": "Explain_Gentle",
       "runtime": "../explain_1.vrma",
       "endpoint": "/api/animations/explain/explain_1",
       "duration_seconds": 10,
-      "sha256": "8be023af3dc34afe5a5a69924f2fe3e0499876d3cf8fa64a0286dbf0660e79cc"
+      "sha256": "a66d1cc0d380cfdacc2f1432f976f21d03c021056fade7444574fdc4b2eccc20"
     }
   ],
   "transition_frames": 10,
@@ -27,18 +27,28 @@
     "Speech owns vowel shapes and jaw; expressions blend back to idle",
     "Elapsed animation time separated from bounded physics timestep",
     "Reduced motion uses common starting pose with automatic blinking",
-    "New idle failure falls back to the legacy JSON idle"
+    "New idle failure falls back to the legacy JSON idle",
+    "Leg IK uses shortest swings and preserves rest roll; knees point forward and feet remain fixed",
+    "Reply gestures start on real audio start and advance on cumulative speech time",
+    "Buffering eases into idle; long explanations loop; completion and interruption release the gesture in ten frames"
   ],
   "archive": "../legacy/; previous explanation variants excluded from catalog",
   "validation": {
+    "date": "2026-10-12",
+    "blender": {
+      "method": "Independent Blender 5.2.1 LTS CLI with the existing VRM addon",
+      "stance_report": "stance-validation-v3.json",
+      "roundtrip_report": "vrma_roundtrip.json",
+      "visual_views": ["source legs front", "source legs 45 degrees"]
+    },
     "python": {
       "command": "python -m unittest discover -s tests -p test_*.py",
-      "passed": 76
+      "passed": 78
     },
     "javascript": {
       "command": "node --test tests/test_vrm_frontend.cjs tests/test_avatar_surface.cjs tests/test_hospital_scenes.cjs tests/test_hospital_rooms.cjs",
-      "total": 112,
-      "passed": 111,
+      "total": 118,
+      "passed": 117,
       "skipped": 1,
       "skip_reason": "Optional AstraYao model is absent from current catalog; synthetic material tests still pass"
     },
@@ -53,27 +63,28 @@
       ],
       "checks": [
         "authored idle loaded",
-        "explain starts and returns to idle",
+        "normalized leg twist below five degrees on all four avatars",
+        "body and Web Audio clocks within 150 ms at sampled checks",
+        "12.2 second reply continues beyond the 10 second clip",
+        "a new reply cancels the previous gesture and returns to idle",
         "greeting still works",
         "missing 3D bundle retains conversation"
-      ]
+      ],
+      "audio": "Synthetic WAV through real browser Web Audio; browser speech fallback separately unit-tested"
     },
     "in_app_browser": {
       "url": "http://127.0.0.1:8890/static/VRMCharacter.html",
       "observed": [
-        "schoolBoy folded-hand idle",
-        "schoolBoy explanatory gesture and return",
-        "reduced-motion common pose",
-        "doctorBoy folded-hand idle and successful loading",
-        "default model restored"
+        "studentGirl idle before and after correction",
+        "health-query reply and completion"
       ],
-      "errors": "No application errors in inspected browser logs"
+      "errors": "No application errors; existing three-vrm deprecation/proxy warnings remain"
     },
-    "limits": "Cross-avatar smoke checks establish loading and lifecycle, not exhaustive continuous mesh collision checks for every character and camera angle."
+    "limits": "Synchronization covers audible start, cumulative playback, buffering and end; it is not word-level semantic choreography. Visual checks are sampled, not exhaustive continuous cloth collision checks. Folder MP4/poster previews remain V2 historical evidence."
   },
   "preserved": [
     "Original model files",
-    "Original Blender authoring/review files",
+    "V2 upper-body gestures and hand paths; historical V1/V2 evidence",
     "Existing greet/alert/booking/confirm/thanks/wink actions",
     "User blockout Blender file",
     "docs directory"

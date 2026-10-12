@@ -203,10 +203,14 @@ def sample(action_name, frame):
         d=(w-s).length;axis=(w-s).normalized()
         a=(r1.length_squared-r2.length_squared+d*d)/(2*d)
         h=math.sqrt(max(0,r1.length_squared-a*a))
-        pole=Vector((sign*.10,-.22,.56))-s
+        # The source knees are almost straight and slightly knock-kneed.
+        # Their cross product is NOT a reliable anatomical hinge: aligning it
+        # to the IK plane used to roll both thighs/shins outward by ~32 degrees.
+        # Aim the knee forwards, then swing each bone to its target with the
+        # shortest rotation. Preserve its rest roll instead of inventing twist.
+        pole=(s+w)*.5+Vector((0,-.3,0))-s
         e=s+axis*a+(pole-axis*pole.dot(axis)).normalized()*h
-        hinge=r1.cross(r2).normalized();desired=(e-s).cross(w-e).normalized()
-        for name,q in [(upper,(basis(e-s,desired)@basis(r1,hinge).transposed()@rest[upper].to_3x3()).to_quaternion()),(lower,(basis(w-e,desired)@basis(r2,hinge).transposed()@rest[lower].to_3x3()).to_quaternion()),(foot,rest[foot].to_quaternion())]:
+        for name,q in [(upper,r1.rotation_difference(e-s)@rest[upper].to_quaternion()),(lower,r2.rotation_difference(w-e)@rest[lower].to_quaternion()),(foot,rest[foot].to_quaternion())]:
             parent=parents[name]
             local[name]=(rest[parent].inverted()@rest[name]).to_quaternion().inverted()@poses[parent].to_quaternion().inverted()@q
             local[name].normalize();update(name)
@@ -249,7 +253,7 @@ def build_actions():
         action['playback_frames']=f'1-{end-1}'
         action['closing_keyframe']=end
         action['source_model']='schoolBoy.vrm'
-        action['review_revision']=2
+        action['review_revision']=3
         action.use_frame_range=True;action.frame_start=1;action.frame_end=end
         action.use_cyclic=True
         arm.animation_data.action=action

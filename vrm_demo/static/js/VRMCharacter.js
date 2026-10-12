@@ -102,6 +102,8 @@ let speechSourceRef = null;
 let playbackStopped = false;
 let speechGeneration = 0;
 let cancelSpeechPlayback = null;
+// A reply owns one gesture session; only audible playback advances its clock.
+let replyMotion = null;
 const VOWELS = ['aa', 'ih', 'ou', 'ee', 'oh'];
 const mouthWeights = Object.fromEntries(VOWELS.map(name => [name, 0]));
 
@@ -467,7 +469,7 @@ function bindUI() {
   const applyMotion = () => {
     document.documentElement.classList.toggle('motion-reduced', motionReduced);
     hospitalScenes?.setReducedMotion(motionReduced);
-    if (motionReduced) { actionRequestId += 1; stopSceneAnimation(); }
+    if (motionReduced) { endReplyMotion(); actionRequestId += 1; stopSceneAnimation(); }
     motionButton.setAttribute('aria-pressed', String(motionReduced));
     motionButton.textContent = motionReduced ? '动态已减少' : '减少动态';
   };
@@ -709,7 +711,7 @@ async function sendMessage(providedText = '', startNewService = false, retry = f
       setInteractionStatus('已为您回复，请查看文字。');
       return;
     }
-    handleAction(data.action);
+    queueReplyMotion(data.action, requestGeneration);
 
     setInteractionStatus('正在为您朗读，请稍候……');
     enableConversation();
@@ -734,17 +736,21 @@ async function sendMessage(providedText = '', startNewService = false, retry = f
 
 async function playReplySegments(segments, voice, generation) {
   const result = {played: 0, failed: 0};
-  if (!segments.length) return result;
-  let next = fetchSpeechPart(segments[0], voice, generation);
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = await next;
-    if (generation !== speechGeneration) break;
-    next = index + 1 < segments.length ? fetchSpeechPart(segments[index + 1], voice, generation) : null;
-    const played = await playSegments([segment], voice.voice_gender, false);
-    result.played += played.played;
-    result.failed += played.failed;
+  try {
+    if (!segments.length) return result;
+    let next = fetchSpeechPart(segments[0], voice, generation);
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = await next;
+      if (generation !== speechGeneration) break;
+      next = index + 1 < segments.length ? fetchSpeechPart(segments[index + 1], voice, generation) : null;
+      const played = await playSegments([segment], voice.voice_gender, false);
+      result.played += played.played;
+      result.failed += played.failed;
+    }
+    return result;
+  } finally {
+    endReplyMotion(generation);
   }
-  return result;
 }
 
 async function fetchSpeechPart(part, voice, generation) {
@@ -775,6 +781,61 @@ function handleAction(actionName) {
   if (!name || motionReduced) return;
   if (!currentVrm || avatarLoading) return;
   playActionByName(name);
+}
+
+function queueReplyMotion(actionName, generation) {
+  const name = Object.hasOwn(ACTION_LABELS, actionName) ? actionName : null;
+  lastSceneAction = name;
+  if (!name || motionReduced || !currentVrm || avatarLoading || generation !== speechGeneration) return;
+  const state = {name, generation, elapsed:0, segment:null, prepared:null, started:false, ended:false};
+  replyMotion = state;
+  // Loading overlaps TTS, but never starts a gesture while waiting for audio.
+  playActionByName(name, state);
+}
+
+function replyMotionTime(state) {
+  return state.elapsed + (state.segment ? Math.max(0, state.segment.time()) : 0);
+}
+
+function startReplyMotionSegment(generation, time) {
+  const state = replyMotion;
+  if (!state || state.ended || state.generation !== generation || generation !== speechGeneration) return null;
+  const segment = {time};
+  state.segment = segment;
+  startPreparedReplyMotion(state);
+  return {state, segment};
+}
+
+function finishReplyMotionSegment(token) {
+  if (!token || token.state.segment !== token.segment) return;
+  token.state.elapsed = replyMotionTime(token.state);
+  token.state.segment = null;
+}
+
+function startPreparedReplyMotion(state) {
+  if (replyMotion !== state || state.ended || !state.segment || !state.prepared || state.started || motionReduced) return;
+  const {animation, secondary, variant} = state.prepared;
+  state.started = true;
+  state.offset = replyMotionTime(state);
+  try {
+    playVrmAnimation(animation, THREE.LoopOnce, state.name);
+    if (scenePlayback) {
+      Object.assign(scenePlayback, {secondary, variant:variant.id, replyMotion:state, speechBlend:0});
+      lastVariant.set(state.name, variant.id);
+    }
+    setModelStatus(`正在${ACTION_LABELS[state.name]}`, '动作跟随语音，播报结束后恢复待机');
+  } catch (error) {
+    console.warn('讲解动作暂不可用，继续播放语音。', error);
+  }
+}
+
+function endReplyMotion(generation = speechGeneration) {
+  const state = replyMotion;
+  if (!state || state.generation !== generation) return;
+  finishReplyMotionSegment(state.segment ? {state, segment:state.segment} : null);
+  state.ended = true;
+  replyMotion = null;
+  // The current pose eases back to idle in ten frames, including interruption.
 }
 
 function setModelStatus(title, detail) {
@@ -1323,7 +1384,7 @@ function getSceneAnimation(name, variant = `${name}_1`) {
   return actionCache.get(variant);
 }
 
-async function playActionByName(name) {
+async function playActionByName(name, reply = null) {
   const id = ++actionRequestId;
   const vrm = currentVrm;
   const modelId = modelLoadId;
@@ -1335,6 +1396,12 @@ async function playActionByName(name) {
       getSceneAnimation(name, variant.id), getVariantSecondary(name, variant, vrm, modelId),
     ]);
     if (id !== actionRequestId || modelId !== modelLoadId || currentVrm !== vrm || motionReduced) return;
+    if (reply) {
+      if (replyMotion !== reply || reply.ended || reply.generation !== speechGeneration) return;
+      reply.prepared = {animation, secondary, variant};
+      startPreparedReplyMotion(reply);
+      return;
+    }
     playVrmAnimation(animation, THREE.LoopOnce, name);
     if (scenePlayback) {
       scenePlayback.secondary = secondary;
@@ -1344,6 +1411,7 @@ async function playActionByName(name) {
     setModelStatus(`正在${ACTION_LABELS[name]}`, '动作结束后自动恢复自然待机');
   } catch (error) {
     if (id !== actionRequestId || modelId !== modelLoadId) return;
+    if (reply) return; // Gesture failure must not interrupt voice or text.
     stopSceneAnimation();
     setModelStatus('已恢复自然待机', '动作暂不可用，不影响对话');
   }
@@ -1445,8 +1513,8 @@ function clearGreetSecondary() {
   greetApplied = [];
 }
 
-function updateGreetSecondary(state) {
-  if (motionReduced || !defaultAvatar) return;
+function updateGreetSecondary(state, weight = 1) {
+  if (motionReduced || !defaultAvatar || weight <= 0) return;
   for (const t of state.secondary || []) {
     const end = t.values.length/4 - 1;
     const frame = Math.max(0, Math.min(end, state.elapsed * (t.fps || 24)));
@@ -1455,6 +1523,7 @@ function updateGreetSecondary(state) {
     t.current.fromArray(t.values, index*4);
     t.next.fromArray(t.values, (index+1)*4);
     t.current.slerp(t.next, frame-index);
+    if (weight < 1) t.current.slerp(t.identity ||= new THREE.Quaternion(), 1-weight);
     t.target.quaternion.multiply(t.current);
     greetApplied.push({target:t.target, base});
   }
@@ -1551,27 +1620,41 @@ function playVrmAnimation(animation, loopMode, name = 'preview') {
 function updateSceneAnimation(delta) {
   if (!scenePlayback || !mixer) return;
   const state = scenePlayback;
-  state.elapsed += delta;
+  const speech = state.replyMotion;
+  const repeat = Boolean(speech && state.name === 'explain');
+  const transition = state.transition || .3;
+  let total;
+  if (speech) {
+    total = Math.max(0, replyMotionTime(speech) - speech.offset);
+    state.elapsed = repeat ? total % state.duration : Math.min(total, state.duration);
+    const target = speech.segment && !speech.ended ? 1 : 0;
+    const step = Math.max(0, delta) / transition;
+    state.speechBlend += Math.max(-step, Math.min(step, target - state.speechBlend));
+  } else {
+    state.elapsed += delta;
+    total = state.elapsed;
+  }
   const second = Math.floor(state.elapsed);
   if (state.name === 'explain' && state.displayedSecond !== second) {
     state.displayedSecond = second;
-    setModelStatus('正在讲解', `${Math.min(second, Math.ceil(state.duration))} / ${Math.ceil(state.duration)} 秒 · 结束后恢复腹前叠手`);
+    setModelStatus('正在讲解', speech ? '动作跟随语音，播报结束后恢复腹前叠手' : `${Math.min(second, Math.ceil(state.duration))} / ${Math.ceil(state.duration)} 秒 · 结束后恢复腹前叠手`);
   }
   for (const p of state.bases) {
     p.baseRotation.copy(p.node.quaternion);
     p.basePosition.copy(p.node.position);
   }
   const baseExpressions = new Map(state.expressions.map(name => [name, currentVrm.expressionManager.getValue(name) || 0]));
-  mixer.update(delta);
+  if (speech) mixer.setTime(state.elapsed);
+  else mixer.update(delta);
   // Always publish the sampled pose, including constant/held keyframes.
   for (const { target, proxy, property } of state.bindings) {
     if (property === 'weight') target.weight = proxy.weight;
     else target[property].copy(proxy[property]);
   }
-  const transition = state.transition || .3;
   const smooth = t => t * t * (3 - 2 * t);
-  const enter = smooth(Math.min(1, state.elapsed / transition));
-  const leave = smooth(Math.max(0, Math.min(1, (state.duration - state.elapsed) / transition)));
+  const enter = smooth(Math.min(1, total / transition));
+  const clipLeave = repeat ? 1 : smooth(Math.max(0, Math.min(1, (state.duration - state.elapsed) / transition)));
+  const leave = clipLeave * (speech ? smooth(state.speechBlend) : 1);
   for (const p of state.bases) {
     const from = state.from.get(p.name);
     if (enter < 1) {
@@ -1589,8 +1672,8 @@ function updateSceneAnimation(delta) {
     const incoming = value * enter + start * (1 - enter);
     setExpression(name, incoming * leave + baseExpressions.get(name) * (1 - leave));
   }
-  updateGreetSecondary(state);
-  if (state.elapsed >= state.duration) {
+  updateGreetSecondary(state, enter * leave);
+  if ((!repeat && state.elapsed >= state.duration) || (speech?.ended && state.speechBlend <= 0)) {
     stopSceneAnimation();
     updateIdle(0);
     updateIdleHands(0);
@@ -1608,6 +1691,8 @@ async function initAudioContext() {
 }
 
 function stopCurrentSpeech() {
+  endReplyMotion();
+  actionRequestId += 1;
   playbackStopped = true;
   speechGeneration += 1;
   for (const controller of activeSpeechControllers) controller.abort();
@@ -1699,10 +1784,12 @@ function playAudioWithVisemes(buffer, timeline, generation = speechGeneration) {
       samples: new Uint8Array(analyser.frequencyBinCount),
     };
     speechSourceRef = source;
+    let motionToken = null;
     let settled = false;
     const finish = (success, error) => {
       if (settled) return;
       settled = true;
+      finishReplyMotionSegment(motionToken);
       source.disconnect();
       analyser.disconnect();
       if (speechSourceRef === source) speechSourceRef = null;
@@ -1719,6 +1806,8 @@ function playAudioWithVisemes(buffer, timeline, generation = speechGeneration) {
     source.onended = () => finish(true);
     try {
       source.start();
+      const startedAt = audioContext.currentTime;
+      motionToken = startReplyMotionSegment(generation, () => Math.min(buffer.duration, audioContext.currentTime - startedAt));
     } catch (error) {
       finish(false, error);
     }
@@ -1730,9 +1819,11 @@ function speakWithBrowser(text, generation = speechGeneration, gender = 'female'
     if (playbackStopped || generation !== speechGeneration) { resolve(false); return; }
     if (!('speechSynthesis' in window)) { resolve(false); return; }
     let settled = false;
+    let motionToken = null;
     const finish = (success) => {
       if (settled) return;
       settled = true;
+      finishReplyMotionSegment(motionToken);
       if (cancelSpeechPlayback === cancel) cancelSpeechPlayback = null;
       if (generation === speechGeneration) {
         speaking = false;
@@ -1752,7 +1843,11 @@ function speakWithBrowser(text, generation = speechGeneration, gender = 'female'
       const voice = voices.find(v => names.test(v.name)) || voices.find(v => v.default) || voices[0];
       if (voice) utterance.voice = voice;
       utterance.onstart = () => {
-        if (!settled && !playbackStopped && generation === speechGeneration) { speaking = true; browserSpeaking = true; }
+        if (!settled && !playbackStopped && generation === speechGeneration) {
+          speaking = true; browserSpeaking = true;
+          const startedAt = performance.now();
+          motionToken = startReplyMotionSegment(generation, () => (performance.now() - startedAt) / 1000);
+        }
       };
       utterance.onend = () => finish(true);
       utterance.onerror = () => finish(false);

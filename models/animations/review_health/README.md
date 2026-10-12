@@ -1,8 +1,18 @@
-# 安心健康助手 · 新动作审核版 V2
+# 安心健康助手 · 动作工程 V3
 
-基于项目当前默认的 `models/characters/schoolBoy.vrm`，使用 Blender 5.2.1 LTS 与本机现有 VRM 插件制作。模型网格、外观、材质、原始骨架和 `T-Pose` 保留；本目录保留审核工程和证据；用户确认后，V2 导出已接入正式网页。
+基于项目当前默认的 `models/characters/schoolBoy.vrm`，使用 Blender 5.2.1 LTS 与本机现有 VRM 插件制作。模型网格、外观、材质、原始骨架和 `T-Pose` 保留；本目录保留审核工程和证据。
 
-**V2 已修正右肘袖管扭转塌陷和叠手姿态折腕过大的问题。** 调整手臂旋转分配、手腕方向及分离／回收路径，保留原网格、权重和骨架。参见 [修正前后对比](joint_compare.html) 与 [V2 关节检查](joint_audit_v2/README.md)。V2 已作为网页默认待机与讲解动作，审核页继续保留对照预览。
+## V3：腿部朝向与语音同步（2026-10-12）
+
+- 站姿求解使用最短旋转，保留大腿、小腿原有轴向朝向。移除由近乎伸直的腿骨叉积带入的约 32° 额外扭转；膝盖向前自然弯曲，双脚保持固定。
+- 主应用收到文字时预加载动作，等 Web Audio 真正开始或浏览器语音触发 `onstart` 后播放。动作使用实际播报时间；分句等待时平滑回到待机，下一句继续。长讲解循环 10 秒动作，结束、打断或切换角色时约 10 帧回到待机。
+- 语音不可用时保留文字；不在等待 TTS 或仅显示文字时播放讲解。讲解动作和词句没有逐词手势标注，当前同步范围是播报开始、持续、分句等待和结束。
+- 当前 `.blend`、两份 VRMA 及网页运行资产为 **V3**。`stance-validation-v3.json` 是本次 Blender 逐帧腿部检查；`vrma_roundtrip.json` 已重新生成；`runtime-integration.json` 记录运行验证。
+- **本目录 MP4、海报、`validation.json`、`joint_audit_v2/` 和 `iteration_review.json` 保留为 V2 历史审核证据。** 它们没有重新渲染，不能用来判断 V3 腿部效果；当前姿态请在主应用查看。
+
+## V2 历史修正
+
+**V2 已修正右肘袖管扭转塌陷和叠手姿态折腕过大的问题。** 调整手臂旋转分配、手腕方向及分离／回收路径，保留原网格、权重和骨架。参见 [修正前后对比](joint_compare.html) 与 [V2 关节检查](joint_audit_v2/README.md)。V3 保留这些手臂修正。
 
 `previous_v1/` 保存修改前的 Blender 工程、动画导出、视频和生成脚本；`joint_audit/` 保留第一版问题证据，不能视为当前版本结论。
 
@@ -44,7 +54,7 @@
 - `joint_audit_v2/measurements.json`：逐整数帧检查腕部折角、前臂轴向旋转和相邻帧旋转变化；配合正面、侧面、背面及手部近景实渲图复核。共同叠手姿态的左／右腕折角从约 66°／68° 降至 23°／27°，讲解右腕最大折角约 30°。
 - `iteration_review.json`：本轮修改范围、前后证据和验收记录。
 - `render-manifest.json`：实际预览分辨率、帧率、循环数量和编码信息。
-- 正式网页使用 `../Idle_Doctor.vrma` 与 `../explain_1.vrma`，两者与本目录 V2 导出逐字节一致。运行时适配、切换、口型及回归验证记录见 `runtime-integration.json`。
+- 正式网页使用 `../Idle_Doctor.vrma` 与 `../explain_1.vrma`，两者与本目录当前 V3 导出逐字节一致。运行时适配、切换、口型及回归验证记录见 `runtime-integration.json`。
 
 ## 复现
 
@@ -56,6 +66,7 @@ blender -b models/animations/review_health/Anxin_Health_Actions.blend --python-e
 blender -b models/animations/review_health/Anxin_Health_Actions.blend --python-exit-code 1 --python tools/animation_authoring/audit_health_joints.py
 blender -b models/animations/review_health/Anxin_Health_Actions.blend --python-exit-code 1 --python tools/animation_authoring/export_health_review.py
 blender -b models/animations/review_health/Anxin_Health_Actions.blend --python-exit-code 1 --python tools/animation_authoring/check_health_vrma.py
+blender -b models/animations/review_health/Anxin_Health_Actions.blend --python-exit-code 1 --python tools/animation_authoring/validate_health_stance.py
 blender -b models/animations/review_health/Anxin_Health_Actions.blend --python-exit-code 1 --python tools/animation_authoring/render_health_review.py
 python tools/animation_authoring/encode_health_review.py
 ```
